@@ -165,75 +165,6 @@ function Initialize-NewVM {
     return $newVM
 }
 
-function Initialize-VMCustomization {
-    param (
-        [Microsoft.HyperV.PowerShell.VirtualMachine]$VM,
-        [string]$OSName
-    )
-
-    $VMPath = $VM.Path
-
-    $osType = ($OSImagePaths | Where-Object { $_.Name -eq $OSName }).OSType
-
-    if ($osType -eq "Windows" -or $osType -eq "Linux") {
-        # Create a working directory for ISO preparation
-        $workingDir = Join-Path $HOME "UnattendWork"
-        $isoRoot = Join-Path $workingDir "isoroot"
-
-        if (-not (Test-Path -Path $workingDir)) {
-            New-Item -ItemType Directory -Path $workingDir -Force | Out-Null
-        }
-        if (-not (Test-Path -Path $isoRoot)) {
-            New-Item -ItemType Directory -Path $isoRoot -Force | Out-Null
-        }
-
-        if ($osType -eq "Windows") {
-            # Windows-specific customization
-            $unattendFilePath = Join-Path $isoRoot "unattend.xml"
-            if (-not (Test-Path -Path $unattendFilePath)) {
-                New-Item -ItemType File -Path $unattendFilePath -Force | Out-Null
-            }
-
-            # TODO: Implement unattend.xml settings here
-
-        } elseif ($osType -eq "Linux") {
-            # Linux-specific customization using cloud-init
-            $cloudInitFilePath = Join-Path $isoRoot "cloud-init.cfg"
-            if (-not (Test-Path -Path $cloudInitFilePath)) {
-                New-Item -ItemType File -Path $cloudInitFilePath -Force | Out-Null
-            }
-
-            # TODO: Implement cloud-init configuration here
-        }
-
-        # Paths for oscdimg and ISO output
-        $isoOutput = Join-Path $workingDir "Custom.iso"
-
-        # Create ISO from ISO root folder
-        & $OscdimgPath -n -m $isoRoot $isoOutput
-
-        # Attach the ISO to the VM
-        $isoDestination = Join-Path $VMPath "Custom.iso"
-        Copy-Item -Path $isoOutput -Destination $isoDestination -Force
-
-        # Clean up the working directory
-        Remove-Item -Path $workingDir -Recurse -Force
-
-        # Check if there is already a DVD drive on the VM
-        $dvdDrive = Get-VMDvdDrive -VM $VM -ErrorAction SilentlyContinue
-
-        if ($dvdDrive) {
-            # If a DVD drive exists, set its path to the custom ISO
-            Set-VMDvdDrive -VM $VM -Path $isoDestination
-        } else {
-            # If no DVD drive exists, add a new one and set its path
-            Add-VMDvdDrive -VM $VM -Path $isoDestination
-        }
-    } else {
-        Write-Verbose "Unsupported OS type for the selected image. Skipping customization phase."
-    }
-}
-
 function New-UnattendXml {
     [CmdletBinding()]
     param(
@@ -418,6 +349,164 @@ function New-UnattendXml {
     # Save to file
     $xml.Save($OutputPath)
 }
+
+function New-CloudInitFiles {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$OutputDirectory,
+
+        [string]$Hostname,
+
+        [string]$Username = "ubuntu",
+
+        [SecureString]$UserPassword,  # Plain text password, will be hashed by cloud-init on first boot
+
+        [string]$IPAddress,
+        [string]$SubnetMask,
+        [string]$Gateway,
+        [string[]]$DnsServers,
+
+        [string]$SearchDomain
+    )
+
+    # Create output directory if not exists
+    if (-not (Test-Path $OutputDirectory)) {
+        New-Item -Path $OutputDirectory -ItemType Directory | Out-Null
+    }
+
+    # Construct network config YAML snippet
+    $networkConfig = @"
+version: 2
+ethernets:
+  eth0:
+    dhcp4: no
+    addresses: [${IPAddress}/${Convert-SubnetMaskToCIDR($SubnetMask)}]
+"@
+
+    if ($Gateway) {
+        $networkConfig += "    gateway4: $Gateway`n"
+    }
+    if ($DnsServers -and $DnsServers.Count -gt 0) {
+        $dnsList = $DnsServers -join ", "
+        $networkConfig += "    nameservers:`n      addresses: [${dnsList}]`n"
+    }
+    if ($SearchDomain) {
+        $networkConfig += "      search: [$SearchDomain]`n"
+    }
+
+    # user_data YAML content
+    $userData = @"
+#cloud-config
+hostname: $Hostname
+users:
+  - name: $Username
+    plain_text_passwd: '$UserPassword'
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+ssh_pwauth: true
+
+network:
+  $networkConfig
+"@
+
+    # Write user_data file
+    $userDataPath = Join-Path $OutputDirectory "user_data"
+    $userData | Out-File -FilePath $userDataPath -Encoding ascii
+
+    # meta_data.json content
+    $metaData = @{
+        hostname = $Hostname
+        instance_id = "instance-001"
+        local_hostname = $Hostname
+    } | ConvertTo-Json -Depth 3
+
+    $metaDataPath = Join-Path $OutputDirectory "meta_data.json"
+    $metaData | Out-File -FilePath $metaDataPath -Encoding ascii
+
+    Write-Host "cloud-init config files written to $OutputDirectory"
+}
+
+function Convert-SubnetMaskToCIDR {
+    param([string]$SubnetMask)
+    # Convert subnet mask (e.g. 255.255.255.0) to CIDR prefix length (e.g. 24)
+    $bytes = $SubnetMask.Split(".") | ForEach-Object {[Convert]::ToByte($_)}
+    $binary = ($bytes | ForEach-Object { [Convert]::ToString($_,2).PadLeft(8,'0') }) -join ""
+    return ($binary.ToCharArray() | Where-Object {$_ -eq '1'}).Count
+}
+
+function Initialize-VMCustomization {
+    param (
+        [Microsoft.HyperV.PowerShell.VirtualMachine]$VM,
+        [string]$OSName
+    )
+
+    $VMPath = $VM.Path
+
+    $osType = ($OSImagePaths | Where-Object { $_.Name -eq $OSName }).OSType
+
+    if ($osType -eq "Windows" -or $osType -eq "Linux") {
+        # Create a working directory for ISO preparation
+        $workingDir = Join-Path $HOME "UnattendWork"
+        $isoRoot = Join-Path $workingDir "isoroot"
+
+        if (-not (Test-Path -Path $workingDir)) {
+            New-Item -ItemType Directory -Path $workingDir -Force | Out-Null
+        }
+        if (-not (Test-Path -Path $isoRoot)) {
+            New-Item -ItemType Directory -Path $isoRoot -Force | Out-Null
+        }
+
+        if ($osType -eq "Windows") {
+            # Windows-specific customization
+            $unattendFilePath = Join-Path $isoRoot "unattend.xml"
+            if (-not (Test-Path -Path $unattendFilePath)) {
+                New-Item -ItemType File -Path $unattendFilePath -Force | Out-Null
+            }
+
+            # TODO: Implement unattend.xml settings here
+            New-UnattendXml
+
+        } elseif ($osType -eq "Linux") {
+            # Linux-specific customization using cloud-init
+            $cloudInitFilePath = Join-Path $isoRoot "cloud-init.cfg"
+            if (-not (Test-Path -Path $cloudInitFilePath)) {
+                New-Item -ItemType File -Path $cloudInitFilePath -Force | Out-Null
+            }
+
+            # TODO: Implement cloud-init configuration here
+            New-CloudInitFiles
+        }
+
+        # Paths for oscdimg and ISO output
+        $isoOutput = Join-Path $workingDir "Custom.iso"
+
+        # Create ISO from ISO root folder
+        & $OscdimgPath -n -m $isoRoot $isoOutput
+
+        # Attach the ISO to the VM
+        $isoDestination = Join-Path $VMPath "Custom.iso"
+        Copy-Item -Path $isoOutput -Destination $isoDestination -Force
+
+        # Clean up the working directory
+        Remove-Item -Path $workingDir -Recurse -Force
+
+        # Check if there is already a DVD drive on the VM
+        $dvdDrive = Get-VMDvdDrive -VM $VM -ErrorAction SilentlyContinue
+
+        if ($dvdDrive) {
+            # If a DVD drive exists, set its path to the custom ISO
+            Set-VMDvdDrive -VM $VM -Path $isoDestination
+        } else {
+            # If no DVD drive exists, add a new one and set its path
+            Add-VMDvdDrive -VM $VM -Path $isoDestination
+        }
+    } else {
+        Write-Verbose "Unsupported OS type for the selected image. Skipping customization phase."
+    }
+}
+
 
 
 Test-Environment
