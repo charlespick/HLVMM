@@ -26,8 +26,13 @@ param (
 )
 function Get-OSImagePaths {
     param (
-        [string]$VMImagesFolder = "\\fscluster01.makerad.makerland.xyz\HLVM\VMImages"
+        [string]$VMImagesFolder = "\\files01.makerad.makerland.xyz\Automation\VMImages"
     )
+
+    $serverName = ($VMImagesFolder -split '\\')[2] # Extract the server name from the UNC path
+    if (-not (Test-Connection -ComputerName $serverName -Count 1 -Quiet)) {
+        throw "Unable to connect to server '$serverName'. Please ensure the server is reachable."
+    }
 
     if (-not (Test-Path -Path $VMImagesFolder)) {
         throw "VMImages folder not found at path '$VMImagesFolder'. Please ensure the path is correct."
