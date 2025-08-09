@@ -234,6 +234,192 @@ function Initialize-VMCustomization {
     }
 }
 
+function New-UnattendXml {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$OutputPath,
+
+        # Hostname
+        [string]$ComputerName,
+
+        # IP settings
+        [string]$IPAddress,
+        [string]$SubnetMask,
+        [string]$DefaultGateway,
+        [string[]]$DnsServers,
+        [string]$SearchDomain,
+
+        # Domain join info
+        [string]$DomainName,
+        [string]$DomainJoinUser,
+        [SecureString]$DomainJoinPassword,
+        [string]$MachineObjectOU,
+
+        # Administrator password
+        [SecureString]$AdminPassword
+    )
+
+    function New-Element($name, $text = $null) {
+        $elem = $xml.CreateElement($name, $ns)
+        if ($null -ne $text) { $elem.InnerText = $text }
+        return $elem
+    }
+    
+    function New-Settings($passName) {
+        $settings = New-Element "settings"
+        $settings.SetAttribute("pass", $passName)
+        return $settings
+    }
+
+    # Namespace for unattend.xml
+    $ns = "urn:schemas-microsoft-com:unattend"
+
+    # Create XML document
+    $xml = New-Object System.Xml.XmlDocument
+
+    # Add XML declaration
+    $xml.AppendChild($xml.CreateXmlDeclaration("1.0", "utf-8", $null)) | Out-Null
+
+    # Create root unattend element
+    $root = $xml.CreateElement("unattend", $ns)
+    $xml.AppendChild($root) | Out-Null
+
+    # Helper function to create elements with namespace and optional text
+
+
+    # SPECIALIZE PASS
+    $settingsSpecialize = New-Settings "specialize"
+    $root.AppendChild($settingsSpecialize) | Out-Null
+
+    # --- Deployment component for hostname & domain join ---
+    $deploymentComponent = New-Element "component"
+    $deploymentComponent.SetAttribute("name", "Microsoft-Windows-Deployment")
+    $deploymentComponent.SetAttribute("processorArchitecture", "amd64")
+    $deploymentComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $deploymentComponent.SetAttribute("language", "neutral")
+    $deploymentComponent.SetAttribute("versionScope", "nonSxS")
+
+    $needDeployment = $false
+
+    if ($ComputerName) {
+        $child = New-Element "ComputerName" $ComputerName
+        $deploymentComponent.AppendChild($child) | Out-Null
+        $needDeployment = $true
+    }
+
+    if ($DomainName) {
+        # Domain Join settings
+        $credentials = New-Element "Credentials"
+
+        if ($DomainName) {
+            $child = New-Element "Domain" $DomainName
+            $credentials.AppendChild($child) | Out-Null
+        }
+        if ($DomainJoinUser) {
+            $child = New-Element "Domain" $DomainJoinUser
+            $credentials.AppendChild($child) | Out-Null
+        }
+        if ($DomainJoinPassword) {
+            $child = New-Element "Domain" $DomainJoinPassword
+            $credentials.AppendChild($child) | Out-Null
+        }
+
+        $deploymentComponent.AppendChild($credentials) | Out-Null
+
+        $child = New-Element "JoinDomain" $DomainName
+        $deploymentComponent.AppendChild($child) | Out-Null
+
+        if ($MachineObjectOU) {
+            $child = New-Element "MachineObjectOU" $MachineObjectOU
+            $deploymentComponent.AppendChild($child) | Out-Null
+        }
+
+        $needDeployment = $true
+    }
+
+    if ($needDeployment) {
+        $settingsSpecialize.AppendChild($deploymentComponent) | Out-Null
+    }
+
+    # --- TCPIP Component for IP config (also in specialize pass) ---
+    if ($IPAddress -and $SubnetMask) {
+        $tcpipComponent = New-Element "component"
+        $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
+        $tcpipComponent.SetAttribute("processorArchitecture", "amd64")
+        $tcpipComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $tcpipComponent.SetAttribute("language", "neutral")
+        $tcpipComponent.SetAttribute("versionScope", "nonSxS")
+
+        $interfaces = $xml.CreateElement("Interfaces", $ns)
+
+        $interface = $xml.CreateElement("Interface", $ns)
+        # NIC Identifier: you might want to parameterize this if needed
+        $idElem = $xml.CreateElement("Identifier", $ns)
+        $idElem.InnerText = "Ethernet"
+        $interface.AppendChild($idElem) | Out-Null
+
+        $ipv4Settings = $xml.CreateElement("IPv4Settings", $ns)
+        $child = New-Element "Address" $IPAddress
+        $ipv4Settings.AppendChild($child) | Out-Null
+        $child = New-Element "subnetMask" $SubnetMask
+        $ipv4Settings.AppendChild($child) | Out-Null
+
+        if ($DefaultGateway) {
+            $child = New-Element "DefaultGateway" $DefaultGateway
+            $ipv4Settings.AppendChild($child) | Out-Null
+        }
+
+        if ($DnsServers -and $DnsServers.Count -gt 0) {
+            $dnsServersNode = $xml.CreateElement("DNSServers", $ns)
+            foreach ($dns in $DnsServers) {
+                $child = New-Element "String" $dns
+                $dnsServersNode.AppendChild($child) | Out-Null
+            }
+            $ipv4Settings.AppendChild($dnsServersNode) | Out-Null
+        }
+
+        if ($SearchDomain) {
+            $child = New-Element "SearchDomain" $SearchDomain
+            $ipv4Settings.AppendChild($child) | Out-Null
+        }
+
+        $interface.AppendChild($ipv4Settings) | Out-Null
+        $interfaces.AppendChild($interface) | Out-Null
+        $tcpipComponent.AppendChild($interfaces) | Out-Null
+
+        $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
+    }
+
+    # --- Shell-Setup Component for Administrator password ---
+    if ($AdminPassword) {
+        $settingsSpecializeShell = New-Settings "specialize"
+        $root.AppendChild($settingsSpecializeShell) | Out-Null
+
+        $shellComponent = New-Element "component"
+        $shellComponent.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
+        $shellComponent.SetAttribute("processorArchitecture", "amd64")
+        $shellComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $shellComponent.SetAttribute("language", "neutral")
+        $shellComponent.SetAttribute("versionScope", "nonSxS")
+
+        $userAccounts = $xml.CreateElement("UserAccounts", $ns)
+        $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
+        $child = New-Element "Value" $AdminPassword
+        $adminPwd.AppendChild($child) | Out-Null
+        $child = New-Element "PlainText" "true"
+        $adminPwd.AppendChild($child) | Out-Null
+
+        $userAccounts.AppendChild($adminPwd) | Out-Null
+        $shellComponent.AppendChild($userAccounts) | Out-Null
+        $settingsSpecializeShell.AppendChild($shellComponent) | Out-Null
+    }
+
+    # Save to file
+    $xml.Save($OutputPath)
+}
+
+
 Test-Environment
 
 # Validate the cluster object
