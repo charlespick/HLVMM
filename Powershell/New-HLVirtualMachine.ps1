@@ -370,6 +370,14 @@ function New-CloudInitFiles {
         [string]$SearchDomain
     )
 
+    function Convert-SubnetMaskToCIDR {
+        param([string]$SubnetMask)
+        # Convert subnet mask (e.g. 255.255.255.0) to CIDR prefix length (e.g. 24)
+        $bytes = $SubnetMask.Split(".") | ForEach-Object {[Convert]::ToByte($_)}
+        $binary = ($bytes | ForEach-Object { [Convert]::ToString($_,2).PadLeft(8,'0') }) -join ""
+        return ($binary.ToCharArray() | Where-Object {$_ -eq '1'}).Count
+    }
+
     # Create output directory if not exists
     if (-not (Test-Path $OutputDirectory)) {
         New-Item -Path $OutputDirectory -ItemType Directory | Out-Null
@@ -428,14 +436,6 @@ network:
     Write-Host "cloud-init config files written to $OutputDirectory"
 }
 
-function Convert-SubnetMaskToCIDR {
-    param([string]$SubnetMask)
-    # Convert subnet mask (e.g. 255.255.255.0) to CIDR prefix length (e.g. 24)
-    $bytes = $SubnetMask.Split(".") | ForEach-Object {[Convert]::ToByte($_)}
-    $binary = ($bytes | ForEach-Object { [Convert]::ToString($_,2).PadLeft(8,'0') }) -join ""
-    return ($binary.ToCharArray() | Where-Object {$_ -eq '1'}).Count
-}
-
 function Initialize-VMCustomization {
     param (
         [Microsoft.HyperV.PowerShell.VirtualMachine]$VM,
@@ -466,7 +466,7 @@ function Initialize-VMCustomization {
             }
 
             # TODO: Implement unattend.xml settings here
-            New-UnattendXml
+            #New-UnattendXml
 
         } elseif ($osType -eq "Linux") {
             # Linux-specific customization using cloud-init
@@ -476,7 +476,7 @@ function Initialize-VMCustomization {
             }
 
             # TODO: Implement cloud-init configuration here
-            New-CloudInitFiles
+            #New-CloudInitFiles
         }
 
         # Paths for oscdimg and ISO output
@@ -507,8 +507,6 @@ function Initialize-VMCustomization {
     }
 }
 
-
-
 Test-Environment
 
 # Validate the cluster object
@@ -524,6 +522,8 @@ if (-not $Cluster) {
     throw "Cluster object is null or invalid."
 }
 
+Write-Host "Deploying new VM $VMName on cluster $($Cluster.Name)"
+
 $newVM = $null
 
 if ($OSName) {
@@ -531,11 +531,18 @@ if ($OSName) {
     if (-not ($OSImagePaths | Where-Object { $_.Name -eq $OSName })) {
         throw "Invalid OSName specified. Valid options are: $($OSImagePaths.Name -join ', ')"
     }
+    Write-Host "Using OS image: $OSName`nBeginning deployment..."
     $newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -OSName $OSName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid
+    Write-Host "VM $VMName created successfully.`nInitializing customization..."
     Initialize-VMCustomization -VM $newVM -OSName $OSName
+    Write-Host "Customization completed for VM $VMName.`nStarting VM..."
 } else {
     $newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid -StorageGB $StorageGB
+    Write-Host "VM $VMName created successfully with $StorageGB GB storage.`nStarting VM..."
 }
 
 Start-VM -VM $newVM
+Write-Host "VM $VMName started successfully.`nAdding VM to cluster role..."
+
 Add-ClusterVirtualMachineRole -Cluster $Cluster -VMId $newVM.Id
+Write-Host "VM $VMName added to cluster role successfully.`nDeployment complete."
