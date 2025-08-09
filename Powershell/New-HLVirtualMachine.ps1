@@ -9,7 +9,6 @@ param (
     [Parameter(Mandatory)]
     [string]$VMName,
 
-    [Parameter(Mandatory)]
     [string]$OSName,
 
     [Parameter()]
@@ -99,24 +98,38 @@ function Get-AvailableClusterNode {
 }
 
 function Initialize-NewVM {
+    [CmdletBinding(DefaultParameterSetName = 'WithOSName')]
     param (
-        [Microsoft.FailoverClusters.PowerShell.Cluster]$Cluster,
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithOSName')]
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithStorageGB')]
         [string]$VMName,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithOSName')]
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithStorageGB')]
+        [Microsoft.FailoverClusters.PowerShell.Cluster]$Cluster,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithOSName')]
         [string]$OSName,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithStorageGB')]
+        [int]$StorageGB,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithOSName')]
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithStorageGB')]
         [int]$MemoryGB,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithOSName')]
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithStorageGB')]
         [int]$CPUCores,
-        [string]$VLANid,
-        [array]$OSImagePaths
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithOSName')]
+        [Parameter(Mandatory = $true, ParameterSetName = 'WithStorageGB')]
+        [int]$VLANid
     )
-
     $availableNode = Get-AvailableClusterNode -Cluster $Cluster
-
     $storage = Get-ClusterSharedVolume -Cluster $Cluster
     $vmpath = Join-Path ($storage[0].SharedVolumeInfo.FriendlyVolumeName) $VMName
     $switch = Get-VMSwitch -ComputerName $availableNode.Name
-
-    $osImagePath = ($OSImagePaths | Where-Object { $_.Name -eq $OSName }).ImagePath
-    $vmDiskPath = Join-Path $vmpath "$VMName.vhdx"
 
     # Validate if the VM path exists, if not, create it
     if (-not (Test-Path -Path $vmpath)) {
@@ -127,21 +140,35 @@ function Initialize-NewVM {
         }
     }
 
-    $newVM = New-VM -Name $VMName -ComputerName $availableNode.Name -Path $vmpath -MemoryStartupBytes ($MemoryGB * 1GB) -Generation 2
+    $newVM = New-VM -Name $VMName -ComputerName $availableNode.Name -Path ($storage[0].SharedVolumeInfo.FriendlyVolumeName) -MemoryStartupBytes ($MemoryGB * 1GB) -Generation 2 -ErrorAction Stop
     Set-VMProcessor -VM $newVM -Count $CPUCores
-    Connect-VMNetworkAdapter -VM $newVM -Switch $switch -VlanId $VLANid
-    Copy-Item -Path $osImagePath -Destination $vmDiskPath -Force
-    Add-VMHardDiskDrive -VM $newVM -Path $vmDiskPath
+    Connect-VMNetworkAdapter -Switch $switch[0].Name -VMName $newVM.Name -ComputerName $availableNode.Name
+    if ($VLANid) {
+        Set-VMNetworkAdapterVlan -VMNetworkAdapter (Get-VMNetworkAdapter -VMName $newVM.Name -ComputerName $availableNode.Name) -Access -VlanId $VLANid 
+    }
 
+    # Logic for parameter set: WithOSName
+    if ($PSCmdlet.ParameterSetName -eq 'WithOSName') {
+        $osImagePath = ($OSImagePaths | Where-Object { $_.Name -eq $OSName }).ImagePath
+        $vmDiskPath = Join-Path $vmpath "$VMName.vhdx"
+    
+        Copy-Item -Path $osImagePath -Destination $vmDiskPath -Force
+        Add-VMHardDiskDrive -VM $newVM -Path $vmDiskPath
+    }
+
+    # Logic for parameter set: WithStorageGB
+    if ($PSCmdlet.ParameterSetName -eq 'WithStorageGB') {
+        $vhdxPath = Join-Path -Path $vmpath -ChildPath "$VMName.vhdx"
+        New-VHD -Path $vhdxPath -SizeBytes ($StorageGB * 1GB) -Dynamic -ComputerName $availableNode.Name -ErrorAction Stop | Out-Null
+        Add-VMHardDiskDrive -VM $newVM -Path $vhdxPath 
+    }
     return $newVM
 }
 
 function Initialize-VMCustomization {
     param (
         [Microsoft.HyperV.PowerShell.VirtualMachine]$VM,
-        [string]$OSName,
-        [array]$OSImagePaths,
-        [string]$OscdimgPath
+        [string]$OSName
     )
 
     $VMPath = $VM.Path
@@ -208,12 +235,6 @@ function Initialize-VMCustomization {
 }
 
 Test-Environment
-$OSImagePaths = Get-OSImagePaths
-
-# Validate the OSName parameter
-if (-not ($OSImagePaths | Where-Object { $_.Name -eq $OSName })) {
-    throw "Invalid OSName specified. Valid options are: $($OSImagePaths.Keys -join ', ')"
-}
 
 # Validate the cluster object
 if ($PSCmdlet.ParameterSetName -eq 'ByName') {
@@ -228,8 +249,18 @@ if (-not $Cluster) {
     throw "Cluster object is null or invalid."
 }
 
-$availableNode = Get-AvailableClusterNode -Cluster $Cluster
-$newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -OSName $OSName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid -OSImagePaths $OSImagePaths
-Initialize-VMCustomization -VM $newVM -OSName $OSName -OSImagePaths $OSImagePaths -OscdimgPath $OscdimgPath
+$newVM = $null
+
+if ($OSName) {
+    $OSImagePaths = Get-OSImagePaths
+    if (-not ($OSImagePaths | Where-Object { $_.Name -eq $OSName })) {
+        throw "Invalid OSName specified. Valid options are: $($OSImagePaths.Name -join ', ')"
+    }
+    $newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -OSName $OSName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid
+    Initialize-VMCustomization -VM $newVM -OSName $OSName
+} else {
+    $newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid -StorageGB $StorageGB
+}
+
 Start-VM -VM $newVM
-Add-ClusterVirtualMachineRole -Cluster $Cluster -VirtualMachine $newVM
+Add-ClusterVirtualMachineRole -Cluster $Cluster -VMId $newVM.Id
