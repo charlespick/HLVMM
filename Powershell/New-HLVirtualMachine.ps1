@@ -1,5 +1,40 @@
 [CmdletBinding(DefaultParameterSetName = 'ByName')]
 param (
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$IPAddress,
+
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$SubnetMask,
+
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$DefaultGateway,
+
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$DnsServer1,
+
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$DnsServer2,
+
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$SearchDomain,
+
+    [Parameter(ParameterSetName = 'WithNetworking')]
+    [string]$Hostname,
+
+    [Parameter(ParameterSetName = 'WithDomain')]
+    [string]$AdminUsername,
+
+    [Parameter(ParameterSetName = 'WithDomain')]
+    [SecureString]$AdminPassword,
+
+    [Parameter(ParameterSetName = 'WithDomain')]
+    [string]$DomainName,
+
+    [Parameter(ParameterSetName = 'WithDomain')]
+    [string]$DomainJoinUsername,
+
+    [Parameter(ParameterSetName = 'WithDomain')]
+    [SecureString]$DomainJoinPassword,
     [Parameter(Mandatory, ParameterSetName = 'ByName')]
     [string]$ClusterName,
 
@@ -16,6 +51,7 @@ param (
     [int]$MemoryGB = 4,
     [string]$VLANid = "300"
 )
+
 if ($OSName -and $StorageGB) {
     throw "You cannot specify both -OSName and -StorageGB."
 }
@@ -23,6 +59,22 @@ if ($OSName -and $StorageGB) {
 if (-not $OSName -and -not $StorageGB) {
     $StorageGB = 40
 }
+
+if ($PSCmdlet.ParameterSetName -eq 'WithNetworking') {
+    $networkParams = @('IPAddress', 'SubnetMask', 'DefaultGateway', 'DnsServer1', 'DnsServer2', 'SearchDomain', 'Hostname')
+    $provided = $networkParams | Where-Object { $PSBoundParameters.ContainsKey($_) }
+    if ($provided.Count -ne $networkParams.Count) {
+        throw "When using the WithNetworking parameter set, you must provide all of the following parameters: $($networkParams -join ', ')"
+    }
+}
+elseif ($PSCmdlet.ParameterSetName -eq 'WithDomain') {
+    $domainParams = @('AdminUsername', 'AdminPassword', 'DomainName', 'DomainJoinUsername', 'DomainJoinPassword')
+    $provided = $domainParams | Where-Object { $PSBoundParameters.ContainsKey($_) }
+    if ($provided.Count -ne $domainParams.Count) {
+        throw "When using the WithDomain parameter set, you must provide all of the following parameters: $($domainParams -join ', ')"
+    }
+}
+
 function Get-OSImagePaths {
     param (
         [string]$VMImagesFolder = "\\files01.makerad.makerland.xyz\Automation\VMImages"
