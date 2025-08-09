@@ -10,19 +10,19 @@ param (
     [string]$VMName,
 
     [string]$OSName,
+    [int]$StorageGB,
 
-    [Parameter()]
-    [int]$CPUCores = 4,  # Default to 2 cores if not specified
-
-    [Parameter()]
-    [int]$MemoryGB = 4,    # Default to 4 GB if not specified
-
-    [Parameter()]
-    [int]$StorageGB = 40,   # Default to 40 GB if not specified
-
-    [Parameter()]
-    [string]$VLANid = 300  # Default Server VLAN if not specified
+    [int]$CPUCores = 4,
+    [int]$MemoryGB = 4,
+    [string]$VLANid = "300"
 )
+if ($OSName -and $StorageGB) {
+    throw "You cannot specify both -OSName and -StorageGB."
+}
+
+if (-not $OSName -and -not $StorageGB) {
+    $StorageGB = 40
+}
 function Get-OSImagePaths {
     param (
         [string]$VMImagesFolder = "\\files01.makerad.makerland.xyz\Automation\VMImages"
