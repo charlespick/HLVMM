@@ -151,9 +151,22 @@ function Initialize-NewVM {
     if ($PSCmdlet.ParameterSetName -eq 'WithOSName') {
         $osImagePath = ($OSImagePaths | Where-Object { $_.Name -eq $OSName }).ImagePath
         $vmDiskPath = Join-Path $vmpath "$VMName.vhdx"
-    
-        Copy-Item -Path $osImagePath -Destination $vmDiskPath -Force
+        
+        Write-Host "Copying OS image from '$osImagePath' to '$vmDiskPath'..."
+        # Extract the drive letter from $vmDiskPath
+        $driveLetter = $vmDiskPath.Substring(0, 2)  # e.g., "C:"
+        $relativePath = $vmDiskPath.Substring(2)    # e.g., "\clusterstorage\etc"
+
+        # Convert to UNC path using the hypervisor's computer name
+        $uncPath = "\\$($availableNode.Name)\$($driveLetter.TrimEnd(':') + '$')$relativePath"
+
+        # Perform the copy operation using the UNC path
+        Copy-Item -Path $osImagePath -Destination $uncPath -Force
         Add-VMHardDiskDrive -VM $newVM -Path $vmDiskPath
+
+        # Set the boot order to prioritize the newly added VMHardDiskDrive
+        $vmHardDiskDrive = Get-VMHardDiskDrive -VMName $newVM.Name -ComputerName $availableNode.Name
+        Set-VMFirmware -VMName $newVM.Name -FirstBootDevice $vmHardDiskDrive -ComputerName $availableNode.Name
     }
 
     # Logic for parameter set: WithStorageGB
@@ -474,7 +487,8 @@ function Initialize-VMCustomization {
             if (-not (Test-Path -Path $cloudInitFilePath)) {
                 New-Item -ItemType File -Path $cloudInitFilePath -Force | Out-Null
             }
-
+            # Set the secure boot template to Microsoft UEFI Certificate Authority for Linux VMs
+            Set-VMFirmware -VMName $VM.Name -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ComputerName $VM.ComputerName
             # TODO: Implement cloud-init configuration here
             #New-CloudInitFiles
         }
