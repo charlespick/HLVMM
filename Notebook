@@ -1,0 +1,9 @@
+Currently:
+We can locate the image, clone it, make the vm, make an unattend file, make an iso of that file, copy that to the hypervisor, mount it, and specialize the vm
+Windows is failing to specialize from the files generated
+
+Next steps:
+Try packing a native unattend file made by the official tool Windows SIM and see if there are required fields missing
+If it's determined that no required fields are missing (the natively generated file works), then we need to work towards making sure the generated file is exactly as expected
+If there's a problem with the officially generated unattend file, we need to diagnose that first then update the function
+Progress on the linux side hasn't begun yet
