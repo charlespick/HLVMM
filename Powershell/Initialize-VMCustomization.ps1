@@ -19,8 +19,8 @@ function Get-OSImagePaths {
         $imagePath = $_.FullName
 
         # Determine OS type based on the prefix of the filename
-        $osType = if ($fileName -like "WindowsServer2025*") {
-            "WindowsServer2025"
+        $osType = if ($fileName -like "Windows*") {
+            "Windows"
         } elseif ($fileName -like "Ubuntu2404*") {
             "Ubuntu2404"
         } else {
@@ -48,6 +48,7 @@ function Initialize-VMCustomization {
         [Parameter(Mandatory = $true)]
         [Microsoft.HyperV.PowerShell.VirtualMachine]$VM
     )
+
     $OscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
     $VMPath = $VM.Path
     $VMName = $VM.Name
@@ -67,6 +68,9 @@ function Initialize-VMCustomization {
     # Perform the copy operation using the UNC path
     Copy-Item -Path $osImgPath -Destination $uncPath -Force
 
+    Add-VMHardDiskDrive -VM $VM -Path $imgDestination -ControllerType SCSI
+    Set-VMFirmware -FirstBootDevice (Get-VMHardDiskDrive -VM $VM) -VM $VM
+
     # Create a working directory for ISO preparation
     $workingDir = Join-Path $HOME "UnattendWork"
     $isoRoot = Join-Path $workingDir "isoroot"
@@ -79,10 +83,10 @@ function Initialize-VMCustomization {
     }
 
 
-    if ($osType -eq "WindowsServer2025") { # Build ISO folder depending on requirements
+    if ($osType -eq "Windows") { # Build ISO folder depending on requirements
         # Windows-specific customization
         $unattendFilePath = Join-Path $isoRoot "unattend.xml"
-        New-Server2025UnattendXml -OutputPath $unattendFilePath -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions -DomainJoinOptions $DomainJoinOptions
+        New-WindowsUnattendXml -OutputPath $unattendFilePath -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions -DomainJoinOptions $DomainJoinOptions
     } elseif ($osType -eq "Ubuntu2404") {
         Set-VMFirmware -VMName $VM.Name -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ComputerName $VM.ComputerName
         # Linux-specific customization using cloud-init

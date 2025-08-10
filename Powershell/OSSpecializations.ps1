@@ -1,4 +1,4 @@
-function New-Server2025UnattendXml {
+function New-WindowsUnattendXml {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)]
@@ -10,6 +10,11 @@ function New-Server2025UnattendXml {
 
         [string]$ComputerName
     )
+
+    # Truncate computername to 15 characters if greater than 15 characters to avoid sysprep issues
+    if ($ComputerName -and $ComputerName.Length -gt 15) {
+        $ComputerName = $ComputerName.Substring(0, 15)
+    }
 
     function Format-MacToIdentifier {
         param (

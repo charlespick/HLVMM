@@ -21,7 +21,7 @@ $domainJoinOptions.DomainJoinUsername = "domainadmin"
 $domainJoinOptions.DomainJoinPassword = Read-Host -AsSecureString -Prompt "Enter Domain Password"
 $domainJoinOptions.MachineObjectOU = "OU=Servers,DC=ad,DC=contoso,DC=com"
 
-New-Server2025UnattendXml -TcpIpOptions $tcpIpOptions `
+New-WindowsUnattendXml -TcpIpOptions $tcpIpOptions `
     -LocalAdminOptions $localAdminOptions `
     -DomainJoinOptions $domainJoinOptions `
     -ComputerName "TAXKRIW4UIKOSB6" `

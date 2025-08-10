@@ -1,5 +1,16 @@
 # Generate a unique VM name
-$VMname = "templatetest" + (Get-Random -Minimum 1000 -Maximum 9999)
+$VMname = "tmplatetst" + (Get-Random -Minimum 1000 -Maximum 9999)
+
+# Create local admin options
+$localAdminOptions = New-LocalAdminOptions -AdminUsername "Administrator" `
+                                           -AdminPassword (Read-Host "Enter password for local admin account" -AsSecureString)
+
+# Create domain join options
+$domainJoinOptions = New-DomainJoinOptions -DomainName "makerad.makerland.xyz" `
+                                           -DomainJoinUsernameDomain "makerad" `
+                                           -DomainJoinUsername "charlespick" `
+                                           -DomainJoinPassword (Read-Host "Enter password for domain join account" -AsSecureString) `
+                                           -MachineObjectOU "OU=Servers,DC=makerad,DC=makerland,DC=xyz"
 
 # Create the VM
 $cluster = Get-Cluster -Name "tmpecluster02"
@@ -15,17 +26,6 @@ $tcpIpOptions = New-TCPIPOptions -IPAddress "10.3.3.11" `
                                  -DnsServer1 "10.3.3.8" `
                                  -DnsServer2 "10.4.3.2" `
                                  -SearchDomain "makerad.makerland.xyz" 
-
-# Create local admin options
-$localAdminOptions = New-LocalAdminOptions -AdminUsername "Administrator" `
-                                           -AdminPassword (Read-Host "Enter password for local admin account" -AsSecureString)
-
-# Create domain join options
-$domainJoinOptions = New-DomainJoinOptions -DomainName "makerad.makerland.xyz" `
-                                           -DomainJoinUsernameDomain "makerad" `
-                                           -DomainJoinUsername "charlespick" `
-                                           -DomainJoinPassword (Read-Host "Enter password for domain join account" -AsSecureString) `
-                                           -MachineObjectOU "OU=Servers,DC=example,DC=com"
 
 # Customize the VM
 Initialize-VMCustomization -TcpIpOptions $tcpIpOptions `
