@@ -4,25 +4,11 @@ function New-Server2025UnattendXml {
         [Parameter(Mandatory=$true)]
         [string]$OutputPath,
 
-        # Hostname
-        [string]$ComputerName,
+        [TCPIPOptions]$TcpIpOptions,
+        [LocalAdminOptions]$LocalAdminOptions,
+        [DomainJoinOptions]$DomainJoinOptions,
 
-        # IP settings
-        [string]$InterfaceName = "Ethernet",
-        [string]$IPAddress,       # In normal dotted format like 10.3.3.6
-        [string]$SubnetMask,      # e.g. 255.255.255.0
-        [string]$DefaultGateway,
-        [string[]]$DnsServers,
-        [string]$SearchDomain,
-
-        # Domain join info
-        [string]$DomainName,
-        [string]$DomainJoinUser,
-        [SecureString]$DomainJoinPassword,
-        [string]$MachineObjectOU,
-
-        # Administrator password
-        [SecureString]$AdminPassword
+        [string]$ComputerName
     )
 
     # Namespace URIs
@@ -86,120 +72,82 @@ function New-Server2025UnattendXml {
     $shellComponent.SetAttribute("xmlns:wcm", $wcmNs)
     $shellComponent.SetAttribute("xmlns:xsi", $xsiNs)
 
-    # ComputerName
+    # Add empty RegisteredOwner element
+    $shellComponent.AppendChild($xml.CreateElement("RegisteredOwner", $ns)) | Out-Null
+
+    # Add empty RegisteredOrganization element
+    $shellComponent.AppendChild($xml.CreateElement("RegisteredOrganization", $ns)) | Out-Null
+
+    # Add ComputerName if specified
     if ($ComputerName) {
         $shellComponent.AppendChild((New-Element "ComputerName" $ComputerName)) | Out-Null
     }
 
     $settingsSpecialize.AppendChild($shellComponent) | Out-Null
 
-    # Create oobeSystem settings element for UserAccounts
+
+    # Create oobeSystem settings element
     $settingsOobe = New-Settings "oobeSystem"
     $root.AppendChild($settingsOobe) | Out-Null
 
-    if ($AdminPassword) {
-        $shellComponentOobe = $xml.CreateElement("component", $ns)
-        $shellComponentOobe.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
-        $shellComponentOobe.SetAttribute("processorArchitecture", "amd64")
-        $shellComponentOobe.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-        $shellComponentOobe.SetAttribute("language", "neutral")
-        $shellComponentOobe.SetAttribute("versionScope", "nonSxS")
-        $shellComponentOobe.SetAttribute("xmlns:wcm", $wcmNs)
-        $shellComponentOobe.SetAttribute("xmlns:xsi", $xsiNs)
+    # Microsoft-Windows-Shell-Setup component for oobeSystem pass
+    $shellComponentOobe = $xml.CreateElement("component", $ns)
+    $shellComponentOobe.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
+    $shellComponentOobe.SetAttribute("processorArchitecture", "amd64")
+    $shellComponentOobe.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $shellComponentOobe.SetAttribute("language", "neutral")
+    $shellComponentOobe.SetAttribute("versionScope", "nonSxS")
+    $shellComponentOobe.SetAttribute("xmlns:wcm", $wcmNs)
+    $shellComponentOobe.SetAttribute("xmlns:xsi", $xsiNs)
 
-        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $AdminPassword
-
+    if ($LocalAdminOptions.AdminPassword) {
         $userAccounts = $xml.CreateElement("UserAccounts", $ns)
         $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
+        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $LocalAdminOptions.AdminPassword
         $adminPwd.AppendChild((New-Element "Value" $plainAdminPwd)) | Out-Null
         $adminPwd.AppendChild((New-Element "PlainText" "true")) | Out-Null
         $userAccounts.AppendChild($adminPwd) | Out-Null
-
         $shellComponentOobe.AppendChild($userAccounts) | Out-Null
-        $settingsOobe.AppendChild($shellComponentOobe) | Out-Null
     }
 
+    # Add TimeZone element
+    $shellComponentOobe.AppendChild((New-Element "TimeZone" "US Mountain Standard Time")) | Out-Null
 
-    #
-    # Microsoft-Windows-TCPIP component (with namespaces)
-    #
-    if ($IPAddress -and $SubnetMask) {
-        $tcpipComponent = $xml.CreateElement("component", $ns)
-        $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
-        $tcpipComponent.SetAttribute("processorArchitecture", "amd64")
-        $tcpipComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-        $tcpipComponent.SetAttribute("language", "neutral")
-        $tcpipComponent.SetAttribute("versionScope", "nonSxS")
-        $tcpipComponent.SetAttribute("xmlns:wcm", $wcmNs)
-        $tcpipComponent.SetAttribute("xmlns:xsi", $xsiNs)
+    # Add OOBE element with children
+    $oobe = $xml.CreateElement("OOBE", $ns)
+    $oobe.AppendChild((New-Element "HideEULAPage" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "SkipUserOOBE" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "HideOEMRegistrationScreen" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "HideOnlineAccountScreens" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "HideWirelessSetupInOOBE" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "NetworkLocation" "Work")) | Out-Null
+    $oobe.AppendChild((New-Element "ProtectYourPC" "1")) | Out-Null
+    $oobe.AppendChild((New-Element "HideLocalAccountScreen" "true")) | Out-Null
+    $shellComponentOobe.AppendChild($oobe) | Out-Null
 
-        $interfaces = $xml.CreateElement("Interfaces", $ns)
+    $settingsOobe.AppendChild($shellComponentOobe) | Out-Null
 
-        $interface = $xml.CreateElement("Interface", $ns)
-        # Add wcm:action="add" attribute to $interface
-        $attr = $xml.CreateAttribute("wcm", "action", $wcmNs)
-        $attr.Value = "add"
-        $interface.Attributes.Append($attr) | Out-Null
+    # Microsoft-Windows-International-Core component
+    $intlComponent = $xml.CreateElement("component", $ns)
+    $intlComponent.SetAttribute("name", "Microsoft-Windows-International-Core")
+    $intlComponent.SetAttribute("processorArchitecture", "amd64")
+    $intlComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $intlComponent.SetAttribute("language", "neutral")
+    $intlComponent.SetAttribute("versionScope", "nonSxS")
+    $intlComponent.SetAttribute("xmlns:wcm", $wcmNs)
+    $intlComponent.SetAttribute("xmlns:xsi", $xsiNs)
 
-        $ipv4Settings = $xml.CreateElement("Ipv4Settings", $ns)
-        # DHCP disabled
-        $ipv4Settings.AppendChild((New-Element "DhcpEnabled" "false")) | Out-Null
-        $ipv4Settings.AppendChild((New-Element "Metric" "1")) | Out-Null
+    $intlComponent.AppendChild((New-Element "UserLocale" "en-US")) | Out-Null
+    $intlComponent.AppendChild((New-Element "SystemLocale" "en-US")) | Out-Null
+    $intlComponent.AppendChild((New-Element "InputLocale" "0409:00000409")) | Out-Null
+    $intlComponent.AppendChild((New-Element "UILanguage" "en-US")) | Out-Null
 
-        $interface.AppendChild($ipv4Settings) | Out-Null
-
-        # Routes
-        if ($DefaultGateway) {
-            $routes = $xml.CreateElement("Routes", $ns)
-            $route = $xml.CreateElement("Route", $ns)
-            # Add wcm:action="add" attribute to $route
-            $attr = $xml.CreateAttribute("wcm", "action", $wcmNs)
-            $attr.Value = "add"
-            $route.Attributes.Append($attr) | Out-Null
-
-            $route.AppendChild((New-Element "Identifier" "1")) | Out-Null
-            $route.AppendChild((New-Element "Metric" "1")) | Out-Null
-            $route.AppendChild((New-Element "NextHopAddress" $DefaultGateway)) | Out-Null
-            $route.AppendChild((New-Element "Prefix" "0")) | Out-Null
-
-            $routes.AppendChild($route) | Out-Null
-            $interface.AppendChild($routes) | Out-Null
-        }
-
-        # Interface name as <Identifier>
-        $interface.AppendChild((New-Element "Identifier" $InterfaceName)) | Out-Null
-
-        # UnicastIpAddresses (IP in CIDR format)
-        $cidr = "$IPAddress/" + (Get-CidrPrefixLength $SubnetMask)
-        $unicastIps = $xml.CreateElement("UnicastIpAddresses", $ns)
-        $ipAddressElem = $xml.CreateElement("IpAddress", $ns)
-        # Add wcm:action="add" attribute to $ipAddressElem
-        $attr = $xml.CreateAttribute("wcm", "action", $wcmNs)
-        $attr.Value = "add"
-        $ipAddressElem.Attributes.Append($attr) | Out-Null
-        # Add wcm:keyValue="1" attribute to $ipAddressElem
-        $attr2 = $xml.CreateAttribute("wcm", "keyValue", $wcmNs)
-        $attr2.Value = "1"
-        $ipAddressElem.Attributes.Append($attr2) | Out-Null
-
-        $ipAddressElem.InnerText = $cidr
-        $unicastIps.AppendChild($ipAddressElem) | Out-Null
-        $interface.AppendChild($unicastIps) | Out-Null
-
-        $ipAddressElem.InnerText = $cidr
-        $unicastIps.AppendChild($ipAddressElem) | Out-Null
-        $interface.AppendChild($unicastIps) | Out-Null
-
-        $interfaces.AppendChild($interface) | Out-Null
-        $tcpipComponent.AppendChild($interfaces) | Out-Null
-
-        $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
-    }
+    $settingsOobe.AppendChild($intlComponent) | Out-Null
 
     #
     # Microsoft-Windows-UnattendedJoin component (with namespaces)
     #
-    if ($DomainName) {
+    if ($DomainJoinOptions.DomainName) {
         $unattendedJoinComponent = $xml.CreateElement("component", $ns)
         $unattendedJoinComponent.SetAttribute("name", "Microsoft-Windows-UnattendedJoin")
         $unattendedJoinComponent.SetAttribute("processorArchitecture", "amd64")
@@ -208,33 +156,202 @@ function New-Server2025UnattendXml {
         $unattendedJoinComponent.SetAttribute("versionScope", "nonSxS")
         $unattendedJoinComponent.SetAttribute("xmlns:wcm", $wcmNs)
         $unattendedJoinComponent.SetAttribute("xmlns:xsi", $xsiNs)
-
+    
         $identification = $xml.CreateElement("Identification", $ns)
-
+    
+        # JoinDomain comes first, full FQDN
+        $identification.AppendChild((New-Element "JoinDomain" $DomainJoinOptions.DomainName)) | Out-Null
+    
         $credentials = $xml.CreateElement("Credentials", $ns)
-
-        $credentials.AppendChild((New-Element "Domain" $DomainName)) | Out-Null
-        if ($DomainJoinPassword) {
-            $plainDomainJoinPwd = ConvertFrom-SecureStringToPlainText $DomainJoinPassword
+    
+        # Domain inside Credentials is just the short domain (left part before first dot)
+        $shortDomain = ($DomainJoinOptions.DomainName -split '\.')[0]
+    
+        $credentials.AppendChild((New-Element "Domain" $shortDomain)) | Out-Null
+    
+        if ($DomainJoinOptions.DomainJoinUsername) {
+            $credentials.AppendChild((New-Element "Username" $DomainJoinOptions.DomainJoinUsername)) | Out-Null
+        }
+        if ($DomainJoinOptions.DomainJoinPassword) {
+            $plainDomainJoinPwd = ConvertFrom-SecureStringToPlainText $DomainJoinOptions.DomainJoinPassword
             $credentials.AppendChild((New-Element "Password" $plainDomainJoinPwd)) | Out-Null
         }
-        if ($DomainJoinUser) {
-            $credentials.AppendChild((New-Element "Username" $DomainJoinUser)) | Out-Null
-        }
-        
-
+    
         $identification.AppendChild($credentials) | Out-Null
-
-        # Full domain FQDN to join
-        $identification.AppendChild((New-Element "JoinDomain" $DomainName)) | Out-Null
-
-        if ($MachineObjectOU) {
-            $identification.AppendChild((New-Element "MachineObjectOU" $MachineObjectOU)) | Out-Null
+    
+        if ($DomainJoinOptions.MachineObjectOU) {
+            $identification.AppendChild((New-Element "MachineObjectOU" $DomainJoinOptions.MachineObjectOU)) | Out-Null
         }
-
+    
         $unattendedJoinComponent.AppendChild($identification) | Out-Null
         $settingsSpecialize.AppendChild($unattendedJoinComponent) | Out-Null
     }
+    
+    #
+    # Microsoft-Windows-DNS-Client component (with namespaces)
+    #
+    if ($TcpIpOptions.DnsServer1 -or $TcpIpOptions.DnsServer2 -or $TcpIpOptions.SearchDomain) {
+        $dnsClientComponent = $xml.CreateElement("component", $ns)
+        $dnsClientComponent.SetAttribute("name", "Microsoft-Windows-DNS-Client")
+        $dnsClientComponent.SetAttribute("processorArchitecture", "amd64")
+        $dnsClientComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $dnsClientComponent.SetAttribute("language", "neutral")
+        $dnsClientComponent.SetAttribute("versionScope", "nonSxS")
+        $dnsClientComponent.SetAttribute("xmlns:wcm", $wcmNs)
+        $dnsClientComponent.SetAttribute("xmlns:xsi", $xsiNs)
+
+        # DNSSuffixSearchOrder
+        if ($TcpIpOptions.SearchDomain) {
+            $dnsSuffixSearchOrder = $xml.CreateElement("DNSSuffixSearchOrder", $ns)
+
+            $domains = @()
+            # If SearchDomain contains multiple domains separated by commas or spaces, split them
+            if ($TcpIpOptions.SearchDomain -match "[, ]") {
+                $domains = $TcpIpOptions.SearchDomain -split "[, ]+" | Where-Object { $_ -ne "" }
+            } else {
+                $domains = @($TcpIpOptions.SearchDomain)
+            }
+
+            $keyIndex = 1
+            foreach ($domain in $domains) {
+                $domainElem = $xml.CreateElement("DomainName", $ns)
+                # Add wcm:action="add"
+                $attrAction = $xml.CreateAttribute("wcm", "action", $wcmNs)
+                $attrAction.Value = "add"
+                $domainElem.Attributes.Append($attrAction) | Out-Null
+                # Add wcm:keyValue
+                $attrKey = $xml.CreateAttribute("wcm", "keyValue", $wcmNs)
+                $attrKey.Value = "$keyIndex"
+                $domainElem.Attributes.Append($attrKey) | Out-Null
+
+                $domainElem.InnerText = $domain
+                $dnsSuffixSearchOrder.AppendChild($domainElem) | Out-Null
+                $keyIndex++
+            }
+
+            $dnsClientComponent.AppendChild($dnsSuffixSearchOrder) | Out-Null
+        }
+
+        # Interfaces
+        $interfaces = $xml.CreateElement("Interfaces", $ns)
+        $interface = $xml.CreateElement("Interface", $ns)
+
+        $interface.AppendChild((New-Element "Identifier" $TcpIpOptions.MacToConfigure)) | Out-Null
+
+        $interface.AppendChild((New-Element "EnableAdapterDomainNameRegistration" "true")) | Out-Null
+        $interface.AppendChild((New-Element "DisableDynamicUpdate" "false")) | Out-Null
+        if ($TcpIpOptions.SearchDomain) {
+            $interface.AppendChild((New-Element "DNSDomain" $TcpIpOptions.SearchDomain)) | Out-Null
+        }
+
+        # DNSServerSearchOrder
+        $dnsServerSearchOrder = $xml.CreateElement("DNSServerSearchOrder", $ns)
+
+        $dnsServers = @($TcpIpOptions.DnsServer1, $TcpIpOptions.DnsServer2) | Where-Object { $_ -and $_ -ne "" }
+        $dnsIndex = 1
+        foreach ($dns in $dnsServers) {
+            $ipElem = $xml.CreateElement("IpAddress", $ns)
+            # Add wcm:action="add"
+            $attrAction = $xml.CreateAttribute("wcm", "action", $wcmNs)
+            $attrAction.Value = "add"
+            $ipElem.Attributes.Append($attrAction) | Out-Null
+            # Add wcm:keyValue
+            $attrKey = $xml.CreateAttribute("wcm", "keyValue", $wcmNs)
+            $attrKey.Value = "$dnsIndex"
+            $ipElem.Attributes.Append($attrKey) | Out-Null
+
+            $ipElem.InnerText = $dns
+            $dnsServerSearchOrder.AppendChild($ipElem) | Out-Null
+
+            $dnsIndex++
+        }
+        $interface.AppendChild($dnsServerSearchOrder) | Out-Null
+
+        $interfaces.AppendChild($interface) | Out-Null
+        $dnsClientComponent.AppendChild($interfaces) | Out-Null
+
+        $settingsSpecialize.AppendChild($dnsClientComponent) | Out-Null
+    }
+
+    if ($TcpIpOptions.IPAddress -and $TcpIpOptions.SubnetMask -and $TcpIpOptions.MacToConfigure) {
+        $tcpipComponent = $xml.CreateElement("component", $ns)
+        $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
+        $tcpipComponent.SetAttribute("processorArchitecture", "amd64")
+        $tcpipComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $tcpipComponent.SetAttribute("language", "neutral")
+        $tcpipComponent.SetAttribute("versionScope", "nonSxS")
+        $tcpipComponent.SetAttribute("xmlns:wcm", $wcmNs)
+        $tcpipComponent.SetAttribute("xmlns:xsi", $xsiNs)
+    
+        # Interfaces element
+        $interfaces = $xml.CreateElement("Interfaces", $ns)
+    
+        # Interface element with wcm:action="add" attribute
+        $interface = $xml.CreateElement("Interface", $ns)
+        $attrAction = $xml.CreateAttribute("wcm", "action", $wcmNs)
+        $attrAction.Value = "add"
+        $interface.Attributes.Append($attrAction) | Out-Null
+    
+        # Ipv4Settings element
+        $ipv4Settings = $xml.CreateElement("Ipv4Settings", $ns)
+        $ipv4Settings.AppendChild((New-Element "DhcpEnabled" "false")) | Out-Null
+        $interface.AppendChild($ipv4Settings) | Out-Null
+    
+        # UnicastIpAddresses element
+        $unicastIps = $xml.CreateElement("UnicastIpAddresses", $ns)
+    
+        # IP address in CIDR format
+        $cidr = "$($TcpIpOptions.IPAddress)/" + (Get-CidrPrefixLength $TcpIpOptions.SubnetMask)
+    
+        $ipAddressElem = $xml.CreateElement("IpAddress", $ns)
+        $attrIpAction = $xml.CreateAttribute("wcm", "action", $wcmNs)
+        $attrIpAction.Value = "add"
+        $ipAddressElem.Attributes.Append($attrIpAction) | Out-Null
+    
+        $attrKeyValue = $xml.CreateAttribute("wcm", "keyValue", $wcmNs)
+        $attrKeyValue.Value = "1"
+        $ipAddressElem.Attributes.Append($attrKeyValue) | Out-Null
+    
+        $ipAddressElem.InnerText = $cidr
+        $unicastIps.AppendChild($ipAddressElem) | Out-Null
+        $interface.AppendChild($unicastIps) | Out-Null
+    
+        # Identifier element - MAC address
+        $interface.AppendChild((New-Element "Identifier" $TcpIpOptions.MacToConfigure)) | Out-Null
+    
+        # Routes element (if DefaultGateway is set)
+        if ($TcpIpOptions.DefaultGateway) {
+            $routes = $xml.CreateElement("Routes", $ns)
+    
+            $route = $xml.CreateElement("Route", $ns)
+            $attrRouteAction = $xml.CreateAttribute("wcm", "action", $wcmNs)
+            $attrRouteAction.Value = "add"
+            $route.Attributes.Append($attrRouteAction) | Out-Null
+    
+            $route.AppendChild((New-Element "Identifier" "1")) | Out-Null
+            $route.AppendChild((New-Element "Prefix" "0.0.0.0/0")) | Out-Null
+            $route.AppendChild((New-Element "NextHopAddress" $TcpIpOptions.DefaultGateway)) | Out-Null
+    
+            $routes.AppendChild($route) | Out-Null
+            $interface.AppendChild($routes) | Out-Null
+        }
+    
+        $interfaces.AppendChild($interface) | Out-Null
+        $tcpipComponent.AppendChild($interfaces) | Out-Null
+    
+        $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
+    }    
+
+    # Add cpi:offlineImage element (static)
+    $cpiNs = "urn:schemas-microsoft-com:cpi"
+    $cpiOfflineImage = $xml.CreateElement("cpi", "offlineImage", $cpiNs)
+
+    # Create cpi:source attribute with empty string value
+    $attr = $xml.CreateAttribute("cpi", "source", $cpiNs)
+    $attr.Value = ""
+    $cpiOfflineImage.Attributes.Append($attr) | Out-Null
+
+    $root.AppendChild($cpiOfflineImage) | Out-Null
 
     # Save to file
     $xml.Save($OutputPath)

@@ -13,10 +13,6 @@ function New-HLVirtualMachine  {
         [string]$VLANid
     )
 
-    if (-not (Get-Command -Name "New-VM" -ErrorAction SilentlyContinue)) {
-        throw "Hyper-V PowerShell module is not available. Please ensure Hyper-V is installed and the module is imported."
-    }
-
     Write-Host "Deploying new VM $VMName on cluster $($Cluster.Name)"
 
     $availableNode = Get-AvailableClusterNode -Cluster $Cluster
@@ -41,8 +37,15 @@ function New-HLVirtualMachine  {
     }
     Write-Host "VM $VMName created successfully.`nAdding VM to cluster role..."
 
-    Add-ClusterVirtualMachineRole -Cluster $Cluster -VMId $newVM.Id
+    Add-ClusterVirtualMachineRole -Cluster $Cluster -VMId $newVM.Id | Out-Null
     Write-Host "VM $VMName added to cluster role successfully.`nDeployment complete."
+
+    # Power on the VM to trigger mac address generation
+    Start-VM -VM $newVM
+    Start-Sleep -Seconds 5
+    Stop-VM -VM $newVM -Force
+
+    return $newVM
 }
 
 function Add-HLVirtualDisk {
