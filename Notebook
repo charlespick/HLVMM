@@ -23,3 +23,10 @@ Support DHCP
 Separate out some things. For example, create an object like "WindowsOSSpecializationSettings" or "LinuxOSSpecializationSettings" that gets created and passed to the up front function so the command isn't a mile long
 Further refine code flows
 GUI/frontend
+
+Theory:
+New-HLVirtualMachine - requires name, cluster or host, vlanid, corecount, ram optional, storage left out
+Add-HLVirtualDisk - takes vm and adds blank disk
+Initialize-OSSpecialization - takes windowsoptionsprofile or linuxoptionsprofile and an image name, creates and deploys the customization file and clones the image
+New-WindowsOptionsProfile - takes and validates networking, naming, domain, runonce, etc config items and outputs a custom object
+New-LinuxOptionsProfile - similar
