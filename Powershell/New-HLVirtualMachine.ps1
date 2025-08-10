@@ -1,40 +1,19 @@
 [CmdletBinding(DefaultParameterSetName = 'ByName')]
 param (
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$IPAddress,
-
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$SubnetMask,
-
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$DefaultGateway,
-
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$DnsServer1,
-
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$DnsServer2,
-
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$SearchDomain,
-
-    [Parameter(ParameterSetName = 'WithNetworking')]
     [string]$Hostname,
-
-    [Parameter(ParameterSetName = 'WithDomain')]
     [string]$AdminUsername,
-
-    [Parameter(ParameterSetName = 'WithDomain')]
     [SecureString]$AdminPassword,
-
-    [Parameter(ParameterSetName = 'WithDomain')]
     [string]$DomainName,
-
-    [Parameter(ParameterSetName = 'WithDomain')]
     [string]$DomainJoinUsername,
-
-    [Parameter(ParameterSetName = 'WithDomain')]
+    [string]$MachineObjectOU,
     [SecureString]$DomainJoinPassword,
+
     [Parameter(Mandatory, ParameterSetName = 'ByName')]
     [string]$ClusterName,
 
@@ -52,6 +31,8 @@ param (
     [string]$VLANid = "300"
 )
 
+$OscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
+
 if ($OSName -and $StorageGB) {
     throw "You cannot specify both -OSName and -StorageGB."
 }
@@ -59,19 +40,31 @@ if ($OSName -and $StorageGB) {
 if (-not $OSName -and -not $StorageGB) {
     $StorageGB = 40
 }
-
-if ($PSCmdlet.ParameterSetName -eq 'WithNetworking') {
+{ # Make sure all the needed params are provided
     $networkParams = @('IPAddress', 'SubnetMask', 'DefaultGateway', 'DnsServer1', 'DnsServer2', 'SearchDomain', 'Hostname')
-    $provided = $networkParams | Where-Object { $PSBoundParameters.ContainsKey($_) }
-    if ($provided.Count -ne $networkParams.Count) {
-        throw "When using the WithNetworking parameter set, you must provide all of the following parameters: $($networkParams -join ', ')"
-    }
-}
-elseif ($PSCmdlet.ParameterSetName -eq 'WithDomain') {
     $domainParams = @('AdminUsername', 'AdminPassword', 'DomainName', 'DomainJoinUsername', 'DomainJoinPassword')
-    $provided = $domainParams | Where-Object { $PSBoundParameters.ContainsKey($_) }
-    if ($provided.Count -ne $domainParams.Count) {
-        throw "When using the WithDomain parameter set, you must provide all of the following parameters: $($domainParams -join ', ')"
+
+    # Find which networking params were provided
+    $providedNetwork = $networkParams | Where-Object { $PSBoundParameters.ContainsKey($_) }
+
+    # Find which domain params were provided
+    $providedDomain = $domainParams | Where-Object { $PSBoundParameters.ContainsKey($_) }
+
+    # Check if any networking params are set
+    if ($providedNetwork.Count -gt 0 -and $providedNetwork.Count -ne $networkParams.Count) {
+        throw "If any networking parameters are specified, you must specify all: $($networkParams -join ', ')"
+    }
+
+    # Check if any domain params are set
+    if ($providedDomain.Count -gt 0) {
+        # Check all domain params present
+        if ($providedDomain.Count -ne $domainParams.Count) {
+            throw "If any domain parameters are specified, you must specify all: $($domainParams -join ', ')"
+        }
+        # And also ensure all networking params are set
+        if ($providedNetwork.Count -ne $networkParams.Count) {
+            throw "When specifying domain parameters, you must also specify all networking parameters: $($networkParams -join ', ')"
+        }
     }
 }
 
@@ -115,10 +108,6 @@ function Get-OSImagePaths {
 }
 
 function Test-Environment {
-    param (
-        [string]$OscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
-    )
-
     # Validate required tools are present
     if (-not (Test-Path -Path $OscdimgPath)) {
         throw "Required tool 'oscdimg.exe' not found at path '$OscdimgPath'. Please ensure it is installed and the path is correct."
@@ -263,9 +252,17 @@ function New-UnattendXml {
     }
     
     function New-Settings($passName) {
-        $settings = New-Element "settings"
+        $settings = $xml.CreateElement("settings", $ns)
         $settings.SetAttribute("pass", $passName)
         return $settings
+    }
+
+    # Convert SecureString to plain text
+    function ConvertFrom-SecureStringToPlainText([SecureString]$secureString) {
+        if ($null -eq $secureString) { return $null }
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
+        try { [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     }
 
     # Namespace for unattend.xml
@@ -281,10 +278,7 @@ function New-UnattendXml {
     $root = $xml.CreateElement("unattend", $ns)
     $xml.AppendChild($root) | Out-Null
 
-    # Helper function to create elements with namespace and optional text
-
-
-    # SPECIALIZE PASS
+    # SINGLE SPECIALIZE PASS for all settings
     $settingsSpecialize = New-Settings "specialize"
     $root.AppendChild($settingsSpecialize) | Out-Null
 
@@ -305,19 +299,18 @@ function New-UnattendXml {
     }
 
     if ($DomainName) {
-        # Domain Join settings
         $credentials = New-Element "Credentials"
 
-        if ($DomainName) {
-            $child = New-Element "Domain" $DomainName
-            $credentials.AppendChild($child) | Out-Null
-        }
+        $child = New-Element "Domain" $DomainName
+        $credentials.AppendChild($child) | Out-Null
+
         if ($DomainJoinUser) {
-            $child = New-Element "Domain" $DomainJoinUser
+            $child = New-Element "Username" $DomainJoinUser
             $credentials.AppendChild($child) | Out-Null
         }
         if ($DomainJoinPassword) {
-            $child = New-Element "Domain" $DomainJoinPassword
+            $plainDomainJoinPwd = ConvertFrom-SecureStringToPlainText $DomainJoinPassword
+            $child = New-Element "Password" $plainDomainJoinPwd
             $credentials.AppendChild($child) | Out-Null
         }
 
@@ -338,7 +331,7 @@ function New-UnattendXml {
         $settingsSpecialize.AppendChild($deploymentComponent) | Out-Null
     }
 
-    # --- TCPIP Component for IP config (also in specialize pass) ---
+    # --- TCPIP Component for IP config ---
     if ($IPAddress -and $SubnetMask) {
         $tcpipComponent = New-Element "component"
         $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
@@ -350,15 +343,16 @@ function New-UnattendXml {
         $interfaces = $xml.CreateElement("Interfaces", $ns)
 
         $interface = $xml.CreateElement("Interface", $ns)
-        # NIC Identifier: you might want to parameterize this if needed
-        $idElem = $xml.CreateElement("Identifier", $ns)
-        $idElem.InnerText = "Ethernet"
-        $interface.AppendChild($idElem) | Out-Null
+
+        # Use InterfaceIndex instead of Identifier
+        $indexElem = $xml.CreateElement("InterfaceIndex", $ns)
+        $indexElem.InnerText = "0"
+        $interface.AppendChild($indexElem) | Out-Null
 
         $ipv4Settings = $xml.CreateElement("IPv4Settings", $ns)
         $child = New-Element "Address" $IPAddress
         $ipv4Settings.AppendChild($child) | Out-Null
-        $child = New-Element "subnetMask" $SubnetMask
+        $child = New-Element "SubnetMask" $SubnetMask
         $ipv4Settings.AppendChild($child) | Out-Null
 
         if ($DefaultGateway) {
@@ -387,29 +381,37 @@ function New-UnattendXml {
         $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
     }
 
-    # --- Shell-Setup Component for Administrator password ---
+    # --- Shell-Setup Component for Administrator password and ComputerName ---
+    $shellComponent = New-Element "component"
+    $shellComponent.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
+    $shellComponent.SetAttribute("processorArchitecture", "amd64")
+    $shellComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $shellComponent.SetAttribute("language", "neutral")
+    $shellComponent.SetAttribute("versionScope", "nonSxS")
+
+    # ComputerName fallback here if not already set
+    if (-not $ComputerName) {
+        $child = New-Element "ComputerName" "localhost"
+        $shellComponent.AppendChild($child) | Out-Null
+    } else {
+        $child = New-Element "ComputerName" $ComputerName
+        $shellComponent.AppendChild($child) | Out-Null
+    }
+
     if ($AdminPassword) {
-        $settingsSpecializeShell = New-Settings "specialize"
-        $root.AppendChild($settingsSpecializeShell) | Out-Null
-
-        $shellComponent = New-Element "component"
-        $shellComponent.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
-        $shellComponent.SetAttribute("processorArchitecture", "amd64")
-        $shellComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-        $shellComponent.SetAttribute("language", "neutral")
-        $shellComponent.SetAttribute("versionScope", "nonSxS")
-
+        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $AdminPassword
         $userAccounts = $xml.CreateElement("UserAccounts", $ns)
         $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
-        $child = New-Element "Value" $AdminPassword
+        $child = New-Element "Value" $plainAdminPwd
         $adminPwd.AppendChild($child) | Out-Null
         $child = New-Element "PlainText" "true"
         $adminPwd.AppendChild($child) | Out-Null
 
         $userAccounts.AppendChild($adminPwd) | Out-Null
         $shellComponent.AppendChild($userAccounts) | Out-Null
-        $settingsSpecializeShell.AppendChild($shellComponent) | Out-Null
     }
+
+    $settingsSpecialize.AppendChild($shellComponent) | Out-Null
 
     # Save to file
     $xml.Save($OutputPath)
@@ -504,7 +506,19 @@ network:
 function Initialize-VMCustomization {
     param (
         [Microsoft.HyperV.PowerShell.VirtualMachine]$VM,
-        [string]$OSName
+        [string]$OSName,
+        [array]$OSImagePaths,
+        [string]$IPAddress,
+        [string]$SubnetMask,
+        [string]$DefaultGateway,
+        [string[]]$DnsServers,
+        [string]$SearchDomain,
+        [string]$DomainName,
+        [string]$DomainJoinUsername,
+        [SecureString]$DomainJoinPassword,
+        [string]$MachineObjectOU,
+        [SecureString]$AdminPassword,
+        [string]$OscdimgPath
     )
 
     $VMPath = $VM.Path
@@ -526,12 +540,21 @@ function Initialize-VMCustomization {
         if ($osType -eq "Windows") {
             # Windows-specific customization
             $unattendFilePath = Join-Path $isoRoot "unattend.xml"
-            if (-not (Test-Path -Path $unattendFilePath)) {
-                New-Item -ItemType File -Path $unattendFilePath -Force | Out-Null
-            }
+            
 
             # TODO: Implement unattend.xml settings here
-            #New-UnattendXml
+            New-UnattendXml -OutputPath $unattendFilePath `
+                -ComputerName $VM.Name `
+                -IPAddress $IPAddress `
+                -SubnetMask $SubnetMask `
+                -DefaultGateway $DefaultGateway `
+                -DnsServers @($DnsServer1, $DnsServer2) `
+                -SearchDomain $SearchDomain `
+                -DomainName $DomainName `
+                -DomainJoinUser $DomainJoinUsername `
+                -DomainJoinPassword $DomainJoinPassword `
+                -AdminPassword $AdminPassword `
+                -MachineObjectOU $MachineObjectOU
 
         } elseif ($osType -eq "Linux") {
             # Linux-specific customization using cloud-init
@@ -555,9 +578,6 @@ function Initialize-VMCustomization {
         $isoDestination = Join-Path $VMPath "Custom.iso"
         Copy-Item -Path $isoOutput -Destination $isoDestination -Force
 
-        # Clean up the working directory
-        Remove-Item -Path $workingDir -Recurse -Force
-
         # Check if there is already a DVD drive on the VM
         $dvdDrive = Get-VMDvdDrive -VM $VM -ErrorAction SilentlyContinue
 
@@ -568,11 +588,15 @@ function Initialize-VMCustomization {
             # If no DVD drive exists, add a new one and set its path
             Add-VMDvdDrive -VM $VM -Path $isoDestination
         }
+        # Clean up the working directory
+        Remove-Item -Path $workingDir -Recurse -Force
     } else {
         Write-Verbose "Unsupported OS type for the selected image. Skipping customization phase."
     }
 }
 
+# ------------- Script Begins ------------- #
+# Find required tools
 Test-Environment
 
 # Validate the cluster object
@@ -600,7 +624,19 @@ if ($OSName) {
     Write-Host "Using OS image: $OSName`nBeginning deployment..."
     $newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -OSName $OSName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid
     Write-Host "VM $VMName created successfully.`nInitializing customization..."
-    Initialize-VMCustomization -VM $newVM -OSName $OSName
+    Initialize-VMCustomization -VM $newVM -OSName $OSName `
+        -OSImagePaths $OSImagePaths `
+        -IPAddress $IPAddress `
+        -SubnetMask $SubnetMask `
+        -DefaultGateway $DefaultGateway `
+        -DnsServers @($DnsServer1, $DnsServer2) `
+        -SearchDomain $SearchDomain `
+        -DomainName $DomainName `
+        -DomainJoinUsername $DomainJoinUsername `
+        -DomainJoinPassword $DomainJoinPassword `
+        -AdminPassword $AdminPassword `
+        -OscdimgPath $OscdimgPath
+
     Write-Host "Customization completed for VM $VMName.`nStarting VM..."
 } else {
     $newVM = Initialize-NewVM -Cluster $Cluster -VMName $VMName -MemoryGB $MemoryGB -CPUCores $CPUCores -VLANid $VLANid -StorageGB $StorageGB
