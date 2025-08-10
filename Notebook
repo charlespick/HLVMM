@@ -7,3 +7,19 @@ Try packing a native unattend file made by the official tool Windows SIM and see
 If it's determined that no required fields are missing (the natively generated file works), then we need to work towards making sure the generated file is exactly as expected
 If there's a problem with the officially generated unattend file, we need to diagnose that first then update the function
 Progress on the linux side hasn't begun yet
+
+Further:
+Separate out specialization file creators into their own file, per OS
+Create naming convention for images to specify os version
+Convert to module
+Review all functions to ensure standard parmeter, variable naming, and all varables used in functions are accesible via parameters
+Clean up cluster(object) vs cluster(string) nonsense
+Create examples folder
+Add a "You're about to create a VM with these specs" confirmation
+Further refine code compartmentalization
+Support additional OSes
+Support runOnce commands
+Support DHCP
+Separate out some things. For example, create an object like "WindowsOSSpecializationSettings" or "LinuxOSSpecializationSettings" that gets created and passed to the up front function so the command isn't a mile long
+Further refine code flows
+GUI/frontend
