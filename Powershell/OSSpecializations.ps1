@@ -11,6 +11,26 @@ function New-Server2025UnattendXml {
         [string]$ComputerName
     )
 
+    function Format-MacToIdentifier {
+        param (
+            [string]$MacToConfigure
+        )
+    
+        # Remove all non-hexadecimal characters
+        $sanitizedMac = ($MacToConfigure -replace '[^a-fA-F0-9]', '')
+    
+        # Ensure the sanitized MAC is exactly 12 characters long
+        if ($sanitizedMac.Length -ne 12) {
+            throw "Invalid MAC address format. The sanitized MAC must be exactly 12 hexadecimal characters."
+        }
+    
+        # Reformat into the expected format with dashes
+        $formattedMac = $sanitizedMac -replace '(.{2})(.{2})(.{2})(.{2})(.{2})(.{2})', '$1-$2-$3-$4-$5-$6'
+    
+        # Return the formatted MAC address (without tags)
+        return $formattedMac
+    }
+
     # Namespace URIs
     $ns = "urn:schemas-microsoft-com:unattend"
     $wcmNs = "http://schemas.microsoft.com/WMIConfig/2002/State"
@@ -236,7 +256,7 @@ function New-Server2025UnattendXml {
         $interfaces = $xml.CreateElement("Interfaces", $ns)
         $interface = $xml.CreateElement("Interface", $ns)
 
-        $interface.AppendChild((New-Element "Identifier" $TcpIpOptions.MacToConfigure)) | Out-Null
+        $interface.AppendChild((New-Element "Identifier" (Format-MacToIdentifier $TcpIpOptions.MacToConfigure))) | Out-Null
 
         $interface.AppendChild((New-Element "EnableAdapterDomainNameRegistration" "true")) | Out-Null
         $interface.AppendChild((New-Element "DisableDynamicUpdate" "false")) | Out-Null
@@ -317,7 +337,7 @@ function New-Server2025UnattendXml {
         $interface.AppendChild($unicastIps) | Out-Null
     
         # Identifier element - MAC address
-        $interface.AppendChild((New-Element "Identifier" $TcpIpOptions.MacToConfigure)) | Out-Null
+        $interface.AppendChild((New-Element "Identifier" (Format-MacToIdentifier $TcpIpOptions.MacToConfigure))) | Out-Null
     
         # Routes element (if DefaultGateway is set)
         if ($TcpIpOptions.DefaultGateway) {
