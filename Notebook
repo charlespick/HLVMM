@@ -9,24 +9,11 @@ If there's a problem with the officially generated unattend file, we need to dia
 Progress on the linux side hasn't begun yet
 
 Further:
-Separate out specialization file creators into their own file, per OS
 Create naming convention for images to specify os version
-Convert to module
 Review all functions to ensure standard parmeter, variable naming, and all varables used in functions are accesible via parameters
-Clean up cluster(object) vs cluster(string) nonsense
-Create examples folder
-Add a "You're about to create a VM with these specs" confirmation
 Further refine code compartmentalization
 Support additional OSes
 Support runOnce commands
 Support DHCP
-Separate out some things. For example, create an object like "WindowsOSSpecializationSettings" or "LinuxOSSpecializationSettings" that gets created and passed to the up front function so the command isn't a mile long
 Further refine code flows
 GUI/frontend
-
-Theory:
-New-HLVirtualMachine - requires name, cluster or host, vlanid, corecount, ram optional, storage left out
-Add-HLVirtualDisk - takes vm and adds blank disk
-Initialize-OSSpecialization - takes windowsoptionsprofile or linuxoptionsprofile and an image name, creates and deploys the customization file and clones the image
-New-WindowsOptionsProfile - takes and validates networking, naming, domain, runonce, etc config items and outputs a custom object
-New-LinuxOptionsProfile - similar
