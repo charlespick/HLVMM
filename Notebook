@@ -1,16 +1,14 @@
 Currently:
-Windows specialization is working
-Firstboot device isn't being set properly
+Windows side is production ready
 
 Next steps:
 Progress on the linux side hasn't begun yet
-Securely remove custom iso with password after usage
 
 Further:
-Create naming convention for images to specify os version
+Execute copy image commands remotely
+Dynamic sourcing (libraries on different sites)
 Review all functions to ensure standard parmeter, variable naming, and all varables used in functions are accesible via parameters
 Further refine code compartmentalization
-Support additional OSes
 Support runOnce commands
 Support DHCP
 Further refine code flows
