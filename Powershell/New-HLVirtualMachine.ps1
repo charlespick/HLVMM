@@ -18,6 +18,7 @@ param (
     [string]$ClusterName,
 
     [Parameter(Mandatory, ParameterSetName = 'ByObject', ValueFromPipeline)]
+
     [Microsoft.FailoverClusters.PowerShell.Cluster]$Cluster,
 
     [Parameter(Mandatory)]
@@ -229,8 +230,9 @@ function New-UnattendXml {
         [string]$ComputerName,
 
         # IP settings
-        [string]$IPAddress,
-        [string]$SubnetMask,
+        [string]$InterfaceName = "Ethernet",
+        [string]$IPAddress,       # In normal dotted format like 10.3.3.6
+        [string]$SubnetMask,      # e.g. 255.255.255.0
         [string]$DefaultGateway,
         [string[]]$DnsServers,
         [string]$SearchDomain,
@@ -245,12 +247,25 @@ function New-UnattendXml {
         [SecureString]$AdminPassword
     )
 
+    # Namespace URIs
+    $ns = "urn:schemas-microsoft-com:unattend"
+    $wcmNs = "http://schemas.microsoft.com/WMIConfig/2002/State"
+    $xsiNs = "http://www.w3.org/2001/XMLSchema-instance"
+
+    # Create XML document
+    $xml = New-Object System.Xml.XmlDocument
+
+    # Add XML declaration
+    $xml.AppendChild($xml.CreateXmlDeclaration("1.0", "utf-8", $null)) | Out-Null
+
+    # Helper: Create element with namespace and optional text
     function New-Element($name, $text = $null) {
         $elem = $xml.CreateElement($name, $ns)
         if ($null -ne $text) { $elem.InnerText = $text }
         return $elem
     }
-    
+
+    # Helper: Create settings element with pass attribute
     function New-Settings($passName) {
         $settings = $xml.CreateElement("settings", $ns)
         $settings.SetAttribute("pass", $passName)
@@ -265,153 +280,183 @@ function New-UnattendXml {
         finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     }
 
-    # Namespace for unattend.xml
-    $ns = "urn:schemas-microsoft-com:unattend"
-
-    # Create XML document
-    $xml = New-Object System.Xml.XmlDocument
-
-    # Add XML declaration
-    $xml.AppendChild($xml.CreateXmlDeclaration("1.0", "utf-8", $null)) | Out-Null
+    # Calculate CIDR prefix length from SubnetMask (e.g. 255.255.255.0 => 24)
+    function Get-CidrPrefixLength($subnetMask) {
+        $bytes = $subnetMask.Split('.') | ForEach-Object {[Convert]::ToString([int]$_, 2).PadLeft(8,'0')}
+        return ($bytes -join '').ToCharArray() | Where-Object { $_ -eq '1' } | Measure-Object | Select-Object -ExpandProperty Count
+    }
 
     # Create root unattend element
     $root = $xml.CreateElement("unattend", $ns)
     $xml.AppendChild($root) | Out-Null
 
-    # SINGLE SPECIALIZE PASS for all settings
+    # Create specialize settings element
     $settingsSpecialize = New-Settings "specialize"
     $root.AppendChild($settingsSpecialize) | Out-Null
 
-    # --- Deployment component for hostname & domain join ---
-    $deploymentComponent = New-Element "component"
-    $deploymentComponent.SetAttribute("name", "Microsoft-Windows-Deployment")
-    $deploymentComponent.SetAttribute("processorArchitecture", "amd64")
-    $deploymentComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-    $deploymentComponent.SetAttribute("language", "neutral")
-    $deploymentComponent.SetAttribute("versionScope", "nonSxS")
-
-    $needDeployment = $false
-
-    if ($ComputerName) {
-        $child = New-Element "ComputerName" $ComputerName
-        $deploymentComponent.AppendChild($child) | Out-Null
-        $needDeployment = $true
-    }
-
-    if ($DomainName) {
-        $credentials = New-Element "Credentials"
-
-        $child = New-Element "Domain" $DomainName
-        $credentials.AppendChild($child) | Out-Null
-
-        if ($DomainJoinUser) {
-            $child = New-Element "Username" $DomainJoinUser
-            $credentials.AppendChild($child) | Out-Null
-        }
-        if ($DomainJoinPassword) {
-            $plainDomainJoinPwd = ConvertFrom-SecureStringToPlainText $DomainJoinPassword
-            $child = New-Element "Password" $plainDomainJoinPwd
-            $credentials.AppendChild($child) | Out-Null
-        }
-
-        $deploymentComponent.AppendChild($credentials) | Out-Null
-
-        $child = New-Element "JoinDomain" $DomainName
-        $deploymentComponent.AppendChild($child) | Out-Null
-
-        if ($MachineObjectOU) {
-            $child = New-Element "MachineObjectOU" $MachineObjectOU
-            $deploymentComponent.AppendChild($child) | Out-Null
-        }
-
-        $needDeployment = $true
-    }
-
-    if ($needDeployment) {
-        $settingsSpecialize.AppendChild($deploymentComponent) | Out-Null
-    }
-
-    # --- TCPIP Component for IP config ---
-    if ($IPAddress -and $SubnetMask) {
-        $tcpipComponent = New-Element "component"
-        $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
-        $tcpipComponent.SetAttribute("processorArchitecture", "amd64")
-        $tcpipComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-        $tcpipComponent.SetAttribute("language", "neutral")
-        $tcpipComponent.SetAttribute("versionScope", "nonSxS")
-
-        $interfaces = $xml.CreateElement("Interfaces", $ns)
-
-        $interface = $xml.CreateElement("Interface", $ns)
-
-        # Use InterfaceIndex instead of Identifier
-        $indexElem = $xml.CreateElement("InterfaceIndex", $ns)
-        $indexElem.InnerText = "0"
-        $interface.AppendChild($indexElem) | Out-Null
-
-        $ipv4Settings = $xml.CreateElement("IPv4Settings", $ns)
-        $child = New-Element "Address" $IPAddress
-        $ipv4Settings.AppendChild($child) | Out-Null
-        $child = New-Element "SubnetMask" $SubnetMask
-        $ipv4Settings.AppendChild($child) | Out-Null
-
-        if ($DefaultGateway) {
-            $child = New-Element "DefaultGateway" $DefaultGateway
-            $ipv4Settings.AppendChild($child) | Out-Null
-        }
-
-        if ($DnsServers -and $DnsServers.Count -gt 0) {
-            $dnsServersNode = $xml.CreateElement("DNSServers", $ns)
-            foreach ($dns in $DnsServers) {
-                $child = New-Element "String" $dns
-                $dnsServersNode.AppendChild($child) | Out-Null
-            }
-            $ipv4Settings.AppendChild($dnsServersNode) | Out-Null
-        }
-
-        if ($SearchDomain) {
-            $child = New-Element "SearchDomain" $SearchDomain
-            $ipv4Settings.AppendChild($child) | Out-Null
-        }
-
-        $interface.AppendChild($ipv4Settings) | Out-Null
-        $interfaces.AppendChild($interface) | Out-Null
-        $tcpipComponent.AppendChild($interfaces) | Out-Null
-
-        $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
-    }
-
-    # --- Shell-Setup Component for Administrator password and ComputerName ---
-    $shellComponent = New-Element "component"
+    #
+    # Microsoft-Windows-Shell-Setup component (with namespaces)
+    #
+    $shellComponent = $xml.CreateElement("component", $ns)
     $shellComponent.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
     $shellComponent.SetAttribute("processorArchitecture", "amd64")
     $shellComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
     $shellComponent.SetAttribute("language", "neutral")
     $shellComponent.SetAttribute("versionScope", "nonSxS")
 
-    # ComputerName fallback here if not already set
-    if (-not $ComputerName) {
-        $child = New-Element "ComputerName" "localhost"
-        $shellComponent.AppendChild($child) | Out-Null
-    } else {
-        $child = New-Element "ComputerName" $ComputerName
-        $shellComponent.AppendChild($child) | Out-Null
-    }
+    # Add required xmlns attributes for wcm and xsi
+    $shellComponent.SetAttribute("xmlns:wcm", $wcmNs)
+    $shellComponent.SetAttribute("xmlns:xsi", $xsiNs)
 
-    if ($AdminPassword) {
-        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $AdminPassword
-        $userAccounts = $xml.CreateElement("UserAccounts", $ns)
-        $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
-        $child = New-Element "Value" $plainAdminPwd
-        $adminPwd.AppendChild($child) | Out-Null
-        $child = New-Element "PlainText" "true"
-        $adminPwd.AppendChild($child) | Out-Null
-
-        $userAccounts.AppendChild($adminPwd) | Out-Null
-        $shellComponent.AppendChild($userAccounts) | Out-Null
+    # ComputerName
+    if ($ComputerName) {
+        $shellComponent.AppendChild((New-Element "ComputerName" $ComputerName)) | Out-Null
     }
 
     $settingsSpecialize.AppendChild($shellComponent) | Out-Null
+
+    # Create oobeSystem settings element for UserAccounts
+    $settingsOobe = New-Settings "oobeSystem"
+    $root.AppendChild($settingsOobe) | Out-Null
+
+    if ($AdminPassword) {
+        $shellComponentOobe = $xml.CreateElement("component", $ns)
+        $shellComponentOobe.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
+        $shellComponentOobe.SetAttribute("processorArchitecture", "amd64")
+        $shellComponentOobe.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $shellComponentOobe.SetAttribute("language", "neutral")
+        $shellComponentOobe.SetAttribute("versionScope", "nonSxS")
+        $shellComponentOobe.SetAttribute("xmlns:wcm", $wcmNs)
+        $shellComponentOobe.SetAttribute("xmlns:xsi", $xsiNs)
+
+        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $AdminPassword
+
+        $userAccounts = $xml.CreateElement("UserAccounts", $ns)
+        $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
+        $adminPwd.AppendChild((New-Element "Value" $plainAdminPwd)) | Out-Null
+        $adminPwd.AppendChild((New-Element "PlainText" "true")) | Out-Null
+        $userAccounts.AppendChild($adminPwd) | Out-Null
+
+        $shellComponentOobe.AppendChild($userAccounts) | Out-Null
+        $settingsOobe.AppendChild($shellComponentOobe) | Out-Null
+    }
+
+
+    #
+    # Microsoft-Windows-TCPIP component (with namespaces)
+    #
+    if ($IPAddress -and $SubnetMask) {
+        $tcpipComponent = $xml.CreateElement("component", $ns)
+        $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
+        $tcpipComponent.SetAttribute("processorArchitecture", "amd64")
+        $tcpipComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $tcpipComponent.SetAttribute("language", "neutral")
+        $tcpipComponent.SetAttribute("versionScope", "nonSxS")
+        $tcpipComponent.SetAttribute("xmlns:wcm", $wcmNs)
+        $tcpipComponent.SetAttribute("xmlns:xsi", $xsiNs)
+
+        $interfaces = $xml.CreateElement("Interfaces", $ns)
+
+        $interface = $xml.CreateElement("Interface", $ns)
+        # Add wcm:action="add" attribute to $interface
+        $attr = $xml.CreateAttribute("wcm", "action", $wcmNs)
+        $attr.Value = "add"
+        $interface.Attributes.Append($attr) | Out-Null
+
+        $ipv4Settings = $xml.CreateElement("Ipv4Settings", $ns)
+        # DHCP disabled
+        $ipv4Settings.AppendChild((New-Element "DhcpEnabled" "false")) | Out-Null
+        $ipv4Settings.AppendChild((New-Element "Metric" "1")) | Out-Null
+
+        $interface.AppendChild($ipv4Settings) | Out-Null
+
+        # Routes
+        if ($DefaultGateway) {
+            $routes = $xml.CreateElement("Routes", $ns)
+            $route = $xml.CreateElement("Route", $ns)
+            # Add wcm:action="add" attribute to $route
+            $attr = $xml.CreateAttribute("wcm", "action", $wcmNs)
+            $attr.Value = "add"
+            $route.Attributes.Append($attr) | Out-Null
+
+            $route.AppendChild((New-Element "Identifier" "1")) | Out-Null
+            $route.AppendChild((New-Element "Metric" "1")) | Out-Null
+            $route.AppendChild((New-Element "NextHopAddress" $DefaultGateway)) | Out-Null
+            $route.AppendChild((New-Element "Prefix" "0")) | Out-Null
+
+            $routes.AppendChild($route) | Out-Null
+            $interface.AppendChild($routes) | Out-Null
+        }
+
+        # Interface name as <Identifier>
+        $interface.AppendChild((New-Element "Identifier" $InterfaceName)) | Out-Null
+
+        # UnicastIpAddresses (IP in CIDR format)
+        $cidr = "$IPAddress/" + (Get-CidrPrefixLength $SubnetMask)
+        $unicastIps = $xml.CreateElement("UnicastIpAddresses", $ns)
+        $ipAddressElem = $xml.CreateElement("IpAddress", $ns)
+        # Add wcm:action="add" attribute to $ipAddressElem
+        $attr = $xml.CreateAttribute("wcm", "action", $wcmNs)
+        $attr.Value = "add"
+        $ipAddressElem.Attributes.Append($attr) | Out-Null
+        # Add wcm:keyValue="1" attribute to $ipAddressElem
+        $attr2 = $xml.CreateAttribute("wcm", "keyValue", $wcmNs)
+        $attr2.Value = "1"
+        $ipAddressElem.Attributes.Append($attr2) | Out-Null
+
+        $ipAddressElem.InnerText = $cidr
+        $unicastIps.AppendChild($ipAddressElem) | Out-Null
+        $interface.AppendChild($unicastIps) | Out-Null
+
+        $ipAddressElem.InnerText = $cidr
+        $unicastIps.AppendChild($ipAddressElem) | Out-Null
+        $interface.AppendChild($unicastIps) | Out-Null
+
+        $interfaces.AppendChild($interface) | Out-Null
+        $tcpipComponent.AppendChild($interfaces) | Out-Null
+
+        $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
+    }
+
+    #
+    # Microsoft-Windows-UnattendedJoin component (with namespaces)
+    #
+    if ($DomainName) {
+        $unattendedJoinComponent = $xml.CreateElement("component", $ns)
+        $unattendedJoinComponent.SetAttribute("name", "Microsoft-Windows-UnattendedJoin")
+        $unattendedJoinComponent.SetAttribute("processorArchitecture", "amd64")
+        $unattendedJoinComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+        $unattendedJoinComponent.SetAttribute("language", "neutral")
+        $unattendedJoinComponent.SetAttribute("versionScope", "nonSxS")
+        $unattendedJoinComponent.SetAttribute("xmlns:wcm", $wcmNs)
+        $unattendedJoinComponent.SetAttribute("xmlns:xsi", $xsiNs)
+
+        $identification = $xml.CreateElement("Identification", $ns)
+
+        $credentials = $xml.CreateElement("Credentials", $ns)
+
+        $credentials.AppendChild((New-Element "Domain" $DomainName)) | Out-Null
+        if ($DomainJoinPassword) {
+            $plainDomainJoinPwd = ConvertFrom-SecureStringToPlainText $DomainJoinPassword
+            $credentials.AppendChild((New-Element "Password" $plainDomainJoinPwd)) | Out-Null
+        }
+        if ($DomainJoinUser) {
+            $credentials.AppendChild((New-Element "Username" $DomainJoinUser)) | Out-Null
+        }
+        
+
+        $identification.AppendChild($credentials) | Out-Null
+
+        # Full domain FQDN to join
+        $identification.AppendChild((New-Element "JoinDomain" $DomainName)) | Out-Null
+
+        if ($MachineObjectOU) {
+            $identification.AppendChild((New-Element "MachineObjectOU" $MachineObjectOU)) | Out-Null
+        }
+
+        $unattendedJoinComponent.AppendChild($identification) | Out-Null
+        $settingsSpecialize.AppendChild($unattendedJoinComponent) | Out-Null
+    }
 
     # Save to file
     $xml.Save($OutputPath)
@@ -548,7 +593,7 @@ function Initialize-VMCustomization {
                 -IPAddress $IPAddress `
                 -SubnetMask $SubnetMask `
                 -DefaultGateway $DefaultGateway `
-                -DnsServers @($DnsServer1, $DnsServer2) `
+                -DnsServers $DnsServers `
                 -SearchDomain $SearchDomain `
                 -DomainName $DomainName `
                 -DomainJoinUser $DomainJoinUsername `
@@ -574,9 +619,17 @@ function Initialize-VMCustomization {
         # Create ISO from ISO root folder
         & $OscdimgPath -n -m $isoRoot $isoOutput
 
-        # Attach the ISO to the VM
         $isoDestination = Join-Path $VMPath "Custom.iso"
-        Copy-Item -Path $isoOutput -Destination $isoDestination -Force
+        Write-Host "Copying customization image from '$isoOutput' to '$isoDestination'..."
+        # Extract the drive letter from $isoDestination
+        $driveLetter = $isoDestination.Substring(0, 2)  # e.g., "C:"
+        $relativePath = $isoDestination.Substring(2)    # e.g., "\clusterstorage\etc"
+
+        # Convert to UNC path using the hypervisor's computer name
+        $uncPath = "\\$($vm.ComputerName)\$($driveLetter.TrimEnd(':') + '$')$relativePath"
+
+        # Perform the copy operation using the UNC path
+        Copy-Item -Path $isoOutput -Destination $uncPath -Force
 
         # Check if there is already a DVD drive on the VM
         $dvdDrive = Get-VMDvdDrive -VM $VM -ErrorAction SilentlyContinue
