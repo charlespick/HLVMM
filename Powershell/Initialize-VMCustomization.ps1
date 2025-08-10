@@ -126,4 +126,14 @@ function Initialize-VMCustomization {
     # Clean up the working directory
     Remove-Item -Path $workingDir -Recurse -Force
 
+    Start-vm -VM $VM
+    Start-Sleep -Seconds 30
+    # wait checking every 5 seconds to see if the VM has shut down again after specialization completes
+    while ((Get-VM -Name $VM.Name -ComputerName $VM.ComputerName).State -ne 'Off') {
+        Start-Sleep -Seconds 5
+    }
+    # Remove and delete the ISO from the VM
+    Set-VMDvdDrive -VMDvdDrive (Get-VMDvdDrive -VM $VM) -Path $null
+    Start-Sleep -Seconds 5
+    Remove-Item -Path $uncPath -Force
 }

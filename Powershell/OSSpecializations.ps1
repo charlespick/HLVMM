@@ -109,66 +109,9 @@ function New-WindowsUnattendXml {
     }
 
     $settingsSpecialize.AppendChild($shellComponent) | Out-Null
-
-
-    # Create oobeSystem settings element
-    $settingsOobe = New-Settings "oobeSystem"
-    $root.AppendChild($settingsOobe) | Out-Null
-
-    # Microsoft-Windows-Shell-Setup component for oobeSystem pass
-    $shellComponentOobe = $xml.CreateElement("component", $ns)
-    $shellComponentOobe.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
-    $shellComponentOobe.SetAttribute("processorArchitecture", "amd64")
-    $shellComponentOobe.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-    $shellComponentOobe.SetAttribute("language", "neutral")
-    $shellComponentOobe.SetAttribute("versionScope", "nonSxS")
-    $shellComponentOobe.SetAttribute("xmlns:wcm", $wcmNs)
-    $shellComponentOobe.SetAttribute("xmlns:xsi", $xsiNs)
-
-    if ($LocalAdminOptions.AdminPassword) {
-        $userAccounts = $xml.CreateElement("UserAccounts", $ns)
-        $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
-        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $LocalAdminOptions.AdminPassword
-        $adminPwd.AppendChild((New-Element "Value" $plainAdminPwd)) | Out-Null
-        $adminPwd.AppendChild((New-Element "PlainText" "true")) | Out-Null
-        $userAccounts.AppendChild($adminPwd) | Out-Null
-        $shellComponentOobe.AppendChild($userAccounts) | Out-Null
-    }
-
-    # Add TimeZone element
-    $shellComponentOobe.AppendChild((New-Element "TimeZone" "US Mountain Standard Time")) | Out-Null
-
-    # Add OOBE element with children
-    $oobe = $xml.CreateElement("OOBE", $ns)
-    $oobe.AppendChild((New-Element "HideEULAPage" "true")) | Out-Null
-    $oobe.AppendChild((New-Element "SkipUserOOBE" "true")) | Out-Null
-    $oobe.AppendChild((New-Element "HideOEMRegistrationScreen" "true")) | Out-Null
-    $oobe.AppendChild((New-Element "HideOnlineAccountScreens" "true")) | Out-Null
-    $oobe.AppendChild((New-Element "HideWirelessSetupInOOBE" "true")) | Out-Null
-    $oobe.AppendChild((New-Element "NetworkLocation" "Work")) | Out-Null
-    $oobe.AppendChild((New-Element "ProtectYourPC" "1")) | Out-Null
-    $oobe.AppendChild((New-Element "HideLocalAccountScreen" "true")) | Out-Null
-    $shellComponentOobe.AppendChild($oobe) | Out-Null
-
-    $settingsOobe.AppendChild($shellComponentOobe) | Out-Null
-
-    # Microsoft-Windows-International-Core component
-    $intlComponent = $xml.CreateElement("component", $ns)
-    $intlComponent.SetAttribute("name", "Microsoft-Windows-International-Core")
-    $intlComponent.SetAttribute("processorArchitecture", "amd64")
-    $intlComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
-    $intlComponent.SetAttribute("language", "neutral")
-    $intlComponent.SetAttribute("versionScope", "nonSxS")
-    $intlComponent.SetAttribute("xmlns:wcm", $wcmNs)
-    $intlComponent.SetAttribute("xmlns:xsi", $xsiNs)
-
-    $intlComponent.AppendChild((New-Element "UserLocale" "en-US")) | Out-Null
-    $intlComponent.AppendChild((New-Element "SystemLocale" "en-US")) | Out-Null
-    $intlComponent.AppendChild((New-Element "InputLocale" "0409:00000409")) | Out-Null
-    $intlComponent.AppendChild((New-Element "UILanguage" "en-US")) | Out-Null
-
-    $settingsOobe.AppendChild($intlComponent) | Out-Null
-
+    #
+    # Microsoft-Windows-Shell-Setup component (with namespaces)
+    #
     #
     # Microsoft-Windows-UnattendedJoin component (with namespaces)
     #
@@ -211,7 +154,9 @@ function New-WindowsUnattendXml {
         $unattendedJoinComponent.AppendChild($identification) | Out-Null
         $settingsSpecialize.AppendChild($unattendedJoinComponent) | Out-Null
     }
-    
+    #
+    # Microsoft-Windows-UnattendedJoin component (with namespaces)
+    #
     #
     # Microsoft-Windows-DNS-Client component (with namespaces)
     #
@@ -297,7 +242,12 @@ function New-WindowsUnattendXml {
 
         $settingsSpecialize.AppendChild($dnsClientComponent) | Out-Null
     }
-
+    #
+    # Microsoft-Windows-DNS-Client component (with namespaces)
+    #
+    #
+    # Microsoft-Windows-TCPIP component (with namespaces)
+    #
     if ($TcpIpOptions.IPAddress -and $TcpIpOptions.SubnetMask -and $TcpIpOptions.MacToConfigure) {
         $tcpipComponent = $xml.CreateElement("component", $ns)
         $tcpipComponent.SetAttribute("name", "Microsoft-Windows-TCPIP")
@@ -365,8 +315,135 @@ function New-WindowsUnattendXml {
         $tcpipComponent.AppendChild($interfaces) | Out-Null
     
         $settingsSpecialize.AppendChild($tcpipComponent) | Out-Null
-    }    
+    }
+    #
+    # Microsoft-Windows-TCPIP component (with namespaces)
+    #
+    #
+    # Microsoft-Windows-Deployment component (RunSynchronous)
+    #
+    $deployComponent = $xml.CreateElement("component", $ns)
+    $deployComponent.SetAttribute("name", "Microsoft-Windows-Deployment")
+    $deployComponent.SetAttribute("processorArchitecture", "amd64")
+    $deployComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $deployComponent.SetAttribute("language", "neutral")
+    $deployComponent.SetAttribute("versionScope", "nonSxS")
+    $deployComponent.SetAttribute("xmlns:wcm", $wcmNs)
+    $deployComponent.SetAttribute("xmlns:xsi", $xsiNs)
 
+    # Create RunSynchronous container
+    $runSync = $xml.CreateElement("RunSynchronous", $ns)
+
+    # Helper to add commands in order
+    function Add-RunSyncCommand {
+        param(
+            [int]$Order,
+            [string]$Description,
+            [string]$Path
+        )
+        $cmd = $xml.CreateElement("RunSynchronousCommand", $ns)
+        
+        # Correct way to add a wcm:action attribute
+        $cmd.SetAttribute("action", $wcmNs, "add") | Out-Null
+    
+        $cmd.AppendChild((New-Element "Order" $Order)) | Out-Null
+        $cmd.AppendChild((New-Element "Description" $Description)) | Out-Null
+        $cmd.AppendChild((New-Element "Path" $Path)) | Out-Null
+        $cmd.AppendChild((New-Element "WillReboot" "OnRequest")) | Out-Null
+    
+        $runSync.AppendChild($cmd) | Out-Null
+    }
+    
+
+    # Generate a unique GUID for the backup filename
+    $guid = [guid]::NewGuid().ToString()
+
+    Add-RunSyncCommand 1 "mkdir Scripts since Windows looks for SetupComplete.cmd in that directory. If the directory exists, it should be fine." 'cmd.exe /C if not exist %WINDIR%\Setup\Scripts (mkdir %WINDIR%\Setup\Scripts)'
+
+    Add-RunSyncCommand 2 "If SetupComplete.cmd already exists, copy it to a unique file." ("cmd /C if exist %WINDIR%\Setup\Scripts\SetupComplete.cmd (copy %WINDIR%\Setup\Scripts\SetupComplete.cmd %WINDIR%\Setup\Scripts\{0}.cmd /y)" -f $guid)
+
+    Add-RunSyncCommand 3 "Set the Write attribute of SetupComplete.cmd" 'cmd /C if exist %WINDIR%\Setup\Scripts\SetupComplete.cmd (attrib -R %WINDIR%\Setup\Scripts\SetupComplete.cmd)'
+
+    Add-RunSyncCommand 4 "If SetupComplete.cmd already exists, Add New Line in SetupComplete.cmd" 'cmd /C if exist %WINDIR%\Setup\Scripts\SetupComplete.cmd (echo. >> %WINDIR%\Setup\Scripts\SetupComplete.cmd)'
+
+    Add-RunSyncCommand 5 "Add Shutdown VM Command in SetupComplete.cmd" 'cmd /C echo shutdown /s /f >> %WINDIR%\Setup\Scripts\SetupComplete.cmd'
+
+    # Append RunSynchronous to component
+    $deployComponent.AppendChild($runSync) | Out-Null
+
+    # Append to specialize settings
+    $settingsSpecialize.AppendChild($deployComponent) | Out-Null
+    #
+    # Microsoft-Windows-Deployment component (RunSynchronous)
+    #
+
+    # Create oobeSystem settings element
+    $settingsOobe = New-Settings "oobeSystem"
+    $root.AppendChild($settingsOobe) | Out-Null
+
+    #
+    # Microsoft-Windows-Shell-Setup component (oobeSystem)
+    #
+    $shellComponentOobe = $xml.CreateElement("component", $ns)
+    $shellComponentOobe.SetAttribute("name", "Microsoft-Windows-Shell-Setup")
+    $shellComponentOobe.SetAttribute("processorArchitecture", "amd64")
+    $shellComponentOobe.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $shellComponentOobe.SetAttribute("language", "neutral")
+    $shellComponentOobe.SetAttribute("versionScope", "nonSxS")
+    $shellComponentOobe.SetAttribute("xmlns:wcm", $wcmNs)
+    $shellComponentOobe.SetAttribute("xmlns:xsi", $xsiNs)
+
+    if ($LocalAdminOptions.AdminPassword) {
+        $userAccounts = $xml.CreateElement("UserAccounts", $ns)
+        $adminPwd = $xml.CreateElement("AdministratorPassword", $ns)
+        $plainAdminPwd = ConvertFrom-SecureStringToPlainText $LocalAdminOptions.AdminPassword
+        $adminPwd.AppendChild((New-Element "Value" $plainAdminPwd)) | Out-Null
+        $adminPwd.AppendChild((New-Element "PlainText" "true")) | Out-Null
+        $userAccounts.AppendChild($adminPwd) | Out-Null
+        $shellComponentOobe.AppendChild($userAccounts) | Out-Null
+    }
+
+    # Add TimeZone element
+    $shellComponentOobe.AppendChild((New-Element "TimeZone" "US Mountain Standard Time")) | Out-Null
+
+    # Add OOBE element with children
+    $oobe = $xml.CreateElement("OOBE", $ns)
+    $oobe.AppendChild((New-Element "HideEULAPage" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "SkipUserOOBE" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "HideOEMRegistrationScreen" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "HideOnlineAccountScreens" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "HideWirelessSetupInOOBE" "true")) | Out-Null
+    $oobe.AppendChild((New-Element "NetworkLocation" "Work")) | Out-Null
+    $oobe.AppendChild((New-Element "ProtectYourPC" "1")) | Out-Null
+    $oobe.AppendChild((New-Element "HideLocalAccountScreen" "true")) | Out-Null
+    $shellComponentOobe.AppendChild($oobe) | Out-Null
+
+    $settingsOobe.AppendChild($shellComponentOobe) | Out-Null
+    #
+    # Microsoft-Windows-Shell-Setup component (oobeSystem)
+    #
+    #
+    # Microsoft-Windows-International-Core component
+    #
+    $intlComponent = $xml.CreateElement("component", $ns)
+    $intlComponent.SetAttribute("name", "Microsoft-Windows-International-Core")
+    $intlComponent.SetAttribute("processorArchitecture", "amd64")
+    $intlComponent.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+    $intlComponent.SetAttribute("language", "neutral")
+    $intlComponent.SetAttribute("versionScope", "nonSxS")
+    $intlComponent.SetAttribute("xmlns:wcm", $wcmNs)
+    $intlComponent.SetAttribute("xmlns:xsi", $xsiNs)
+
+    $intlComponent.AppendChild((New-Element "UserLocale" "en-US")) | Out-Null
+    $intlComponent.AppendChild((New-Element "SystemLocale" "en-US")) | Out-Null
+    $intlComponent.AppendChild((New-Element "InputLocale" "0409:00000409")) | Out-Null
+    $intlComponent.AppendChild((New-Element "UILanguage" "en-US")) | Out-Null
+
+    $settingsOobe.AppendChild($intlComponent) | Out-Null
+    #
+    # Microsoft-Windows-International-Core component
+    #
+    
     # Add cpi:offlineImage element (static)
     $cpiNs = "urn:schemas-microsoft-com:cpi"
     $cpiOfflineImage = $xml.CreateElement("cpi", "offlineImage", $cpiNs)
