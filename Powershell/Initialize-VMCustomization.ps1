@@ -91,7 +91,7 @@ function Initialize-VMCustomization {
         Set-VMFirmware -VMName $VM.Name -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ComputerName $VM.ComputerName
         # Linux-specific customization using cloud-init
         $cloudInitFilePath = Join-Path $isoRoot "cloud-init.cfg"
-        New-Ubt2404CloudInit -OutputPath $cloudInitFilePath -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions -DomainJoinOptions $DomainJoinOptions
+        New-CloudInitYml -OutputPath $cloudInitFilePath -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions -DomainJoinOptions $DomainJoinOptions
     }
 
     # Paths for oscdimg and ISO output

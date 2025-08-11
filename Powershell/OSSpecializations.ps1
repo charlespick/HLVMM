@@ -459,88 +459,98 @@ function New-WindowsUnattendXml {
     $xml.Save($OutputPath)
 }
 
-function New-Ubt2404CloudInit {
-    [CmdletBinding()]
+function New-CloudInitYml {
     param(
         [Parameter(Mandatory=$true)]
-        [string]$OutputDirectory,
+        [string]$OutputPath,
 
-        [string]$Hostname,
+        [TCPIPOptions]$TcpIpOptions,
+        [LocalAdminOptions]$LocalAdminOptions,
+        [String[]]$RunOnceCmds,
 
-        [string]$Username = "ubuntu",
-
-        [SecureString]$UserPassword,  # Plain text password, will be hashed by cloud-init on first boot
-
-        [string]$IPAddress,
-        [string]$SubnetMask,
-        [string]$Gateway,
-        [string[]]$DnsServers,
-
-        [string]$SearchDomain
+        [string]$ComputerName
     )
 
     function Convert-SubnetMaskToCIDR {
         param([string]$SubnetMask)
-        # Convert subnet mask (e.g. 255.255.255.0) to CIDR prefix length (e.g. 24)
-        $bytes = $SubnetMask.Split(".") | ForEach-Object {[Convert]::ToByte($_)}
-        $binary = ($bytes | ForEach-Object { [Convert]::ToString($_,2).PadLeft(8,'0') }) -join ""
-        return ($binary.ToCharArray() | Where-Object {$_ -eq '1'}).Count
+        $bytes = $SubnetMask.Split(".") | ForEach-Object { [Convert]::ToByte($_) }
+        $binary = ($bytes | ForEach-Object { [Convert]::ToString($_, 2).PadLeft(8, '0') }) -join ""
+        return ($binary.ToCharArray() | Where-Object { $_ -eq '1' }).Count
     }
 
-    # Create output directory if not exists
-    if (-not (Test-Path $OutputDirectory)) {
-        New-Item -Path $OutputDirectory -ItemType Directory | Out-Null
+    # Create output directory if it doesn't exist
+    if (-not (Test-Path $OutputPath)) {
+        New-Item -Path $OutputPath -ItemType Directory | Out-Null
     }
 
-    # Construct network config YAML snippet
-    $networkConfig = @"
-version: 2
-ethernets:
-  eth0:
-    dhcp4: no
-    addresses: [${IPAddress}/${Convert-SubnetMaskToCIDR($SubnetMask)}]
+    $metaData = @"
+instance-id: $ComputerName
+local-hostname: $ComputerName
 "@
 
-    if ($Gateway) {
-        $networkConfig += "    gateway4: $Gateway`n"
+    Set-Content -Path (Join-Path $OutputPath 'meta-data') -Value $metaData -Encoding UTF8
+
+    $userData = @()
+    $userData += "#cloud-config"
+
+    # Networking (if TCPIPOptions provided)
+    if ($TcpIpOptions) {
+        $cidr = Convert-SubnetMaskToCIDR $TcpIpOptions.SubnetMask
+        $userData += "network:"
+        $userData += "  version: 2"
+        $userData += "  ethernets:"
+        $userData += "    eth0:"
+        if ($TcpIpOptions.MacToConfigure) {
+            $userData += "      match:"
+            $userData += "        macaddress: $($TcpIpOptions.MacToConfigure.ToLower())"
+        }
+        $userData += "      addresses:"
+        $userData += "        - $($TcpIpOptions.IPAddress)/$cidr"
+        if ($TcpIpOptions.DefaultGateway) {
+            $userData += "      gateway4: $($TcpIpOptions.DefaultGateway)"
+        }
+        $dnsList = @($TcpIpOptions.DnsServer1, $TcpIpOptions.DnsServer2) | Where-Object { $_ -and $_.Trim() -ne "" }
+        if ($dnsList.Count -gt 0 -or $TcpIpOptions.SearchDomain) {
+            $userData += "      nameservers:"
+            if ($dnsList.Count -gt 0) {
+                $userData += "        addresses:"
+                foreach ($dns in $dnsList) {
+                    $userData += "          - $dns"
+                }
+            }
+            if ($TcpIpOptions.SearchDomain) {
+                $userData += "        search:"
+                $userData += "          - $($TcpIpOptions.SearchDomain)"
+            }
+        }
     }
-    if ($DnsServers -and $DnsServers.Count -gt 0) {
-        $dnsList = $DnsServers -join ", "
-        $networkConfig += "    nameservers:`n      addresses: [${dnsList}]`n"
+
+    # Local admin user
+    if ($LocalAdminOptions) {
+        $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($LocalAdminOptions.AdminPassword)
+        )
+        # Generate SHA-512 hash for Linux
+        $salt = [System.Web.Security.Membership]::GeneratePassword(8,0)
+        $hashed = python3 -c "import crypt; print(crypt.crypt('$plainPassword', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
+        if (-not $hashed) { throw "Failed to hash password. Requires python3 with crypt module." }
+
+        $userData += "users:"
+        $userData += "  - name: $($LocalAdminOptions.AdminUsername)"
+        $userData += "    passwd: $hashed"
+        $userData += "    shell: /bin/bash"
+        $userData += "    sudo: ALL=(ALL) NOPASSWD:ALL"
+        $userData += "    lock_passwd: false"
     }
-    if ($SearchDomain) {
-        $networkConfig += "      search: [$SearchDomain]`n"
+
+    elseif ($RunOnceCmds) {
+        # runcmd (only if not overridden by domain join section)
+        $userData += "runcmd:"
+        foreach ($cmd in $RunOnceCmds) {
+            $userData += "  - $cmd"
+        }
     }
 
-    # user_data YAML content
-    $userData = @"
-#cloud-config
-hostname: $Hostname
-users:
-  - name: $Username
-    plain_text_passwd: '$UserPassword'
-    lock_passwd: false
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-ssh_pwauth: true
-
-network:
-  $networkConfig
-"@
-
-    # Write user_data file
-    $userDataPath = Join-Path $OutputDirectory "user_data"
-    $userData | Out-File -FilePath $userDataPath -Encoding ascii
-
-    # meta_data.json content
-    $metaData = @{
-        hostname = $Hostname
-        instance_id = "instance-001"
-        local_hostname = $Hostname
-    } | ConvertTo-Json -Depth 3
-
-    $metaDataPath = Join-Path $OutputDirectory "meta_data.json"
-    $metaData | Out-File -FilePath $metaDataPath -Encoding ascii
-
-    Write-Host "cloud-init config files written to $OutputDirectory"
+    Set-Content -Path (Join-Path $OutputPath 'user-data') -Value ($userData -join "`n") -Encoding UTF8
 }
+
