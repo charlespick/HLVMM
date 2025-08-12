@@ -1,7 +1,7 @@
 function New-WindowsUnattendXml {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [string]$OutputPath,
 
         [TCPIPOptions]$TcpIpOptions,
@@ -71,7 +71,7 @@ function New-WindowsUnattendXml {
 
     # Calculate CIDR prefix length from SubnetMask (e.g. 255.255.255.0 => 24)
     function Get-CidrPrefixLength($subnetMask) {
-        $bytes = $subnetMask.Split('.') | ForEach-Object {[Convert]::ToString([int]$_, 2).PadLeft(8,'0')}
+        $bytes = $subnetMask.Split('.') | ForEach-Object { [Convert]::ToString([int]$_, 2).PadLeft(8, '0') }
         return ($bytes -join '').ToCharArray() | Where-Object { $_ -eq '1' } | Measure-Object | Select-Object -ExpandProperty Count
     }
 
@@ -178,7 +178,8 @@ function New-WindowsUnattendXml {
             # If SearchDomain contains multiple domains separated by commas or spaces, split them
             if ($TcpIpOptions.SearchDomain -match "[, ]") {
                 $domains = $TcpIpOptions.SearchDomain -split "[, ]+" | Where-Object { $_ -ne "" }
-            } else {
+            }
+            else {
                 $domains = @($TcpIpOptions.SearchDomain)
             }
 
@@ -461,7 +462,7 @@ function New-WindowsUnattendXml {
 
 function New-CloudInitYml {
     param(
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [string]$OutputPath,
 
         [TCPIPOptions]$TcpIpOptions,
@@ -530,26 +531,37 @@ local-hostname: $ComputerName
         $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($LocalAdminOptions.AdminPassword)
         )
-        # Generate SHA-512 hash for Linux
-        $salt = [System.Web.Security.Membership]::GeneratePassword(8,0)
-        $hashed = python3 -c "import crypt; print(crypt.crypt('$plainPassword', crypt.mksalt(crypt.METHOD_SHA512)))" 2>$null
-        if (-not $hashed) { throw "Failed to hash password. Requires python3 with crypt module." }
-
+    
         $userData += "users:"
         $userData += "  - name: $($LocalAdminOptions.AdminUsername)"
-        $userData += "    passwd: $hashed"
         $userData += "    shell: /bin/bash"
         $userData += "    sudo: ALL=(ALL) NOPASSWD:ALL"
         $userData += "    lock_passwd: false"
+    
+        # Let cloud-init set the password via chpasswd (plaintext)
+        $userData += "chpasswd:"
+        $userData += "  list: |"
+        $userData += "    $($LocalAdminOptions.AdminUsername):$plainPassword"
+        $userData += "  expire: false"
+    
+        # If you want password SSH auth enabled (optional)
+        $userData += "ssh_pwauth: true"
     }
 
-    elseif ($RunOnceCmds) {
+    if ($RunOnceCmds) {
         # runcmd (only if not overridden by domain join section)
         $userData += "runcmd:"
         foreach ($cmd in $RunOnceCmds) {
             $userData += "  - $cmd"
         }
     }
+
+    # Always shut down when cloud-init finishes
+    $userData += "power_state:"
+    $userData += "  mode: poweroff"  # or reboot/halt
+    $userData += "  message: Cloud-init complete. Powering off"
+    $userData += "  timeout: 30"
+    $userData += "  condition: true"
 
     Set-Content -Path (Join-Path $OutputPath 'user-data') -Value ($userData -join "`n") -Encoding UTF8
 }

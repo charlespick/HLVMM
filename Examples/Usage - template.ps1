@@ -29,10 +29,10 @@ $tcpIpOptions = New-TCPIPOptions -IPAddress "10.3.3.11" `
 
 # Customize the VM
 Initialize-VMCustomization -TcpIpOptions $tcpIpOptions `
-                           -DomainJoinOptions $domainJoinOptions `
-                           -ImageName "WindowsServer2025_Desktop" `
+                           -ImageName "Ubuntu2404_server" `
                            -VM $vm `
-                           -LocalAdminOptions $localAdminOptions
+                          # -DomainJoinOptions $domainJoinOptions `
+                          # -LocalAdminOptions $localAdminOptions
 
 # Start the VM
 Start-VM -VM $vm

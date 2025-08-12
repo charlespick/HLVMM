@@ -21,9 +21,11 @@ function Get-OSImagePaths {
         # Determine OS type based on the prefix of the filename
         $osType = if ($fileName -like "Windows*") {
             "Windows"
-        } elseif ($fileName -like "Ubuntu2404*") {
-            "Ubuntu2404"
-        } else {
+        }
+        elseif ($fileName -like "Ubuntu*") {
+            "Linux"
+        }
+        else {
             "Unknown"
         }
 
@@ -52,22 +54,33 @@ function Initialize-VMCustomization {
     $OscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
     $VMPath = $VM.Path
     $VMName = $VM.Name
+    $VMHost = $VM.ComputerName
     $OSImagePaths = Get-OSImagePaths
     $osType = ($OSImagePaths | Where-Object { $_.Name -eq $ImageName }).OSType
     $osImgPath = ($OSImagePaths | Where-Object { $_.Name -eq $ImageName }).ImagePath
 
     $imgDestination = Join-Path $VMPath "$VMName.vhdx"
-    Write-Host "Copying disk image from '$osImgPath' to '$imgDestination'..."
-    # Extract the drive letter from $isoDestination
-    $driveLetter = $imgDestination.Substring(0, 2)  # e.g., "C:"
-    $relativePath = $imgDestination.Substring(2)    # e.g., "\clusterstorage\etc"
+    Write-Host "Starting remote copy on '$VMHost' from '$osImgPath' to '$imgDestination'..."
 
-    # Convert to UNC path using the hypervisor's computer name
-    $uncPath = "\\$($vm.ComputerName)\$($driveLetter.TrimEnd(':') + '$')$relativePath"
+    # Create a persistent session so we can run multiple commands
+    $sess = New-PSSession -ComputerName $VMHost
 
-    # Perform the copy operation using the UNC path
-    Copy-Item -Path $osImgPath -Destination $uncPath -Force
-
+    try {
+        Invoke-Command -Session $sess -ScriptBlock {
+            param(
+                [string]$Src,
+                [string]$Dst,
+                [string]$VmName
+            )
+            # Ensure destination directory exists
+            $destDir = Split-Path -Path $Dst
+            Test-Path -LiteralPath $destDir -ErrorAction Stop
+            Copy-Item -Path $Src -Destination $Dst -Force -ErrorAction Stop
+        } -ArgumentList $osImgPath, $imgDestination, $VMName
+    }
+    finally {
+        if ($sess) { Remove-PSSession $sess }
+    }
     Add-VMHardDiskDrive -VM $VM -Path $imgDestination -ControllerType SCSI
     Set-VMFirmware -FirstBootDevice (Get-VMHardDiskDrive -VM $VM) -VM $VM
 
@@ -82,25 +95,31 @@ function Initialize-VMCustomization {
         New-Item -ItemType Directory -Path $isoRoot -Force | Out-Null
     }
 
+    $isoOutput = Join-Path $workingDir "custom.iso"
 
-    if ($osType -eq "Windows") { # Build ISO folder depending on requirements
+    if ($osType -eq "Windows") {
         # Windows-specific customization
         $unattendFilePath = Join-Path $isoRoot "unattend.xml"
         New-WindowsUnattendXml -OutputPath $unattendFilePath -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions -DomainJoinOptions $DomainJoinOptions
-    } elseif ($osType -eq "Ubuntu2404") {
+    
+        # Create ISO for Windows
+        & $OscdimgPath -n -m $isoRoot $isoOutput
+    
+    }
+    elseif ($osType -eq "Linux") {
         Set-VMFirmware -VMName $VM.Name -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ComputerName $VM.ComputerName
+    
         # Linux-specific customization using cloud-init
-        $cloudInitFilePath = Join-Path $isoRoot "cloud-init.cfg"
-        New-CloudInitYml -OutputPath $cloudInitFilePath -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions -DomainJoinOptions $DomainJoinOptions
+        New-CloudInitYml -OutputPath $isoRoot -ComputerName $VM.Name -TcpIpOptions $TcpIpOptions -LocalAdminOptions $LocalAdminOptions
+    
+        # Create ISO for Linux
+        & $OscdimgPath -lCIDATA -n -m $isoRoot $isoOutput
+    } else {
+        Write-Debug "Unsupported OS type: $osType"
+        return
     }
 
-    # Paths for oscdimg and ISO output
-    $isoOutput = Join-Path $workingDir "Custom.iso"
-
-    # Create ISO from ISO root folder
-    & $OscdimgPath -n -m $isoRoot $isoOutput
-
-    $isoDestination = Join-Path $VMPath "Custom.iso"
+    $isoDestination = Join-Path $VMPath "custom.iso"
     Write-Host "Copying customization image from '$isoOutput' to '$isoDestination'..."
     # Extract the drive letter from $isoDestination
     $driveLetter = $isoDestination.Substring(0, 2)  # e.g., "C:"
@@ -118,7 +137,8 @@ function Initialize-VMCustomization {
     if ($dvdDrive) {
         # If a DVD drive exists, set its path to the custom ISO
         Set-VMDvdDrive -VM $VM -Path $isoDestination
-    } else {
+    }
+    else {
         # If no DVD drive exists, add a new one and set its path
         Add-VMDvdDrive -VM $VM -Path $isoDestination
     }
