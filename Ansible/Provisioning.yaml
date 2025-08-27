@@ -17,7 +17,7 @@
 
     - name: Get VM data folder (parent path of VHDX)
       set_fact:
-        vm_data_folder: "{{ vm_vhdx_path | dirname }}"
+        vm_data_folder: "{{ vm_vhdx_path | replace('\\', '/') | dirname | replace('/', '\\') }}"
 
     - name: Debug check values
       debug:
