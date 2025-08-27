@@ -7,8 +7,8 @@
     - name: Run CopyImage.ps1
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\CopyImage.ps1"
-        -VMName '{{ vm_name }}'
-        -ImageName '{{ image_name }}'
+        -VMName "{{ vm_name }}"
+        -ImageName "{{ image_name }}"
       register: copyimage_result
 
     # - name: Extract VHDX path
