@@ -8,8 +8,17 @@ param (
 )
 
 # Define static paths for provisioning ISOs
-$LinuxISOPath = "C:\ProvisioningISOs\LinuxProvisioning.iso"
-$WindowsISOPath = "C:\ProvisioningISOs\WindowsProvisioning.iso"
+$StaticCDPath = Get-ChildItem -Path "C:\ClusterStorage" -Directory |
+    ForEach-Object {
+        $diskImagesPath = Join-Path $_.FullName "ProvisioningISOs"
+        if (Test-Path $diskImagesPath) {
+            return $diskImagesPath
+        }
+    } |
+    Select-Object -First 1
+
+$LinuxISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
+$WindowsISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
 
 # Function to validate if a folder exists
 function Validate-Folder {

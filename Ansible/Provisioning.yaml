@@ -11,19 +11,19 @@
         -ImageName "{{ image_name }}"
       register: copyimage_result
 
-    # - name: Extract VHDX path
-    #   set_fact:
-    #     vm_vhdx_path: "{{ copyimage_result.stdout | trim }}"
+    - name: Extract VHDX path
+      set_fact:
+        vm_vhdx_path: "{{ copyimage_result.stdout | trim }}"
 
-    # - name: Get VM data folder (parent path of VHDX)
-    #   set_fact:
-    #     vm_data_folder: "{{ vm_vhdx_path | dirname }}"
+    - name: Get VM data folder (parent path of VHDX)
+      set_fact:
+        vm_data_folder: "{{ vm_vhdx_path | dirname }}"
 
-    # - name: Debug check values
-    #   debug:
-    #     msg:
-    #       - "VHDX path: {{ vm_vhdx_path }}"
-    #       - "VM data folder: {{ vm_data_folder }}"
+    - name: Debug check values
+      debug:
+        msg:
+          - "VHDX path: {{ vm_vhdx_path }}"
+          - "VM data folder: {{ vm_data_folder }}"
 
     # - name: Run CopyProvisioningISO.ps1
     #   ansible.windows.win_command: >

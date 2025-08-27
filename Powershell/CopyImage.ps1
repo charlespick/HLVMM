@@ -8,8 +8,15 @@ param (
 $ImageFilename = $ImageName + ".vhdx"
 
 # Define static variables
-$StaticNetworkPath = "\\files01.makerad.makerland.xyz\Automation\VMImages"
-$StaticFolder = "hyperv"
+$StaticImagesPath = Get-ChildItem -Path "C:\ClusterStorage" -Directory |
+    ForEach-Object {
+        $diskImagesPath = Join-Path $_.FullName "DiskImages"
+        if (Test-Path $diskImagesPath) {
+            return $diskImagesPath
+        }
+    } |
+    Select-Object -First 1
+$StaticFolder = "Hyper-V"
 
 # Get the cluster shared volumes and identify the one with the largest free space
 $TargetVolume = Get-ClusterSharedVolume |
@@ -22,13 +29,13 @@ if (-not $TargetVolume) {
 }
 
 # Construct the destination path
-$DestinationPath = $TargetVolume.SharedVolumeInfo.FriendlyVolumeName
+$DestinationPath = Join-Path -Path (Join-Path -Path $TargetVolume.SharedVolumeInfo.FriendlyVolumeName -ChildPath $StaticFolder) -ChildPath $VMName
 
 # Ensure the destination has enough free space
-$ImagePath = Join-Path -Path $StaticNetworkPath -ChildPath $ImageFilename
+$ImagePath = Join-Path -Path $StaticImagesPath -ChildPath $ImageFilename
 $ImageSize = (Get-Item $ImagePath).Length
 
-if ($TargetVolume.FreeSpace -lt $ImageSize) {
+if ($TargetVolume.SharedVolumeInfo.Partition.Freespace -lt $ImageSize) {
     Write-Error "Not enough free space on the target volume."
     exit 1
 }
