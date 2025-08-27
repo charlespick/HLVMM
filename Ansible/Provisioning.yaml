@@ -40,19 +40,19 @@
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\WaitForProvisioningKey.ps1"
         -VMName {{ vm_name }}
 
-    # - name: Run PublishProvisioningData.ps1
-    #   ansible.windows.win_command: >
-    #     powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\HLVMM\Scripts\PublishProvisioningData.ps1"
-    #     -VmName {{ vm_name }}
-    #     -GuestLaUid {{ guest_la_uid }}
-    #     -GuestLaPw {{ guest_la_pw }}
-    #     {% if guest_v4_ipaddr is defined and guest_v4_ipaddr|length > 0 %}-GuestV4IpAddr {{ guest_v4_ipaddr }}{% endif %}
-    #     {% if guest_v4_cidrprefix is defined and guest_v4_cidrprefix|length > 0 %}-GuestV4CidrPrefix {{ guest_v4_cidrprefix }}{% endif %}
-    #     {% if guest_v4_defaultgw is defined and guest_v4_defaultgw|length > 0 %}-GuestV4DefaultGw {{ guest_v4_defaultgw }}{% endif %}
-    #     {% if guest_v4_dns1 is defined and guest_v4_dns1|length > 0 %}-GuestV4Dns1 {{ guest_v4_dns1 }}{% endif %}
-    #     {% if guest_v4_dns2 is defined and guest_v4_dns2|length > 0 %}-GuestV4Dns2 {{ guest_v4_dns2 }}{% endif %}
-    #     {% if guest_net_dnssuffix is defined and guest_net_dnssuffix|length > 0 %}-GuestNetDnsSuffix {{ guest_net_dnssuffix }}{% endif %}
-    #     {% if guest_domain_jointarget is defined and guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ guest_domain_jointarget }}{% endif %}
-    #     {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
-    #     {% if guest_domain_joinpw is defined and guest_domain_joinpw|length > 0 %}-GuestDomainJoinPw {{ guest_domain_joinpw }}{% endif %}
+    - name: Run PublishProvisioningData.ps1
+      ansible.windows.win_command: >
+        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\HLVMM\Scripts\PublishProvisioningData.ps1"
+        -VmName {{ vm_name }}
+        -GuestLaUid {{ guest_la_uid }}
+        -GuestLaPw {{ guest_la_pw }}
+        {% if guest_v4_ipaddr is defined and guest_v4_ipaddr|length > 0 %}-GuestV4IpAddr {{ guest_v4_ipaddr }}{% endif %}
+        {% if guest_v4_cidrprefix is defined and guest_v4_cidrprefix|length > 0 %}-GuestV4CidrPrefix {{ guest_v4_cidrprefix }}{% endif %}
+        {% if guest_v4_defaultgw is defined and guest_v4_defaultgw|length > 0 %}-GuestV4DefaultGw {{ guest_v4_defaultgw }}{% endif %}
+        {% if guest_v4_dns1 is defined and guest_v4_dns1|length > 0 %}-GuestV4Dns1 {{ guest_v4_dns1 }}{% endif %}
+        {% if guest_v4_dns2 is defined and guest_v4_dns2|length > 0 %}-GuestV4Dns2 {{ guest_v4_dns2 }}{% endif %}
+        {% if guest_net_dnssuffix is defined and guest_net_dnssuffix|length > 0 %}-GuestNetDnsSuffix {{ guest_net_dnssuffix }}{% endif %}
+        {% if guest_domain_jointarget is defined and guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ guest_domain_jointarget }}{% endif %}
+        {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
+        {% if guest_domain_joinpw is defined and guest_domain_joinpw|length > 0 %}-GuestDomainJoinPw {{ guest_domain_joinpw }}{% endif %}
         

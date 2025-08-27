@@ -22,18 +22,16 @@ if ($OSFamily -eq "Linux") {
     Set-VMFirmware -VM $vm -SecureBootTemplate "MicrosoftUEFICertificateAuthority"
 }
 
-# Configure RAM and CPU
-Set-VM -VM $vm -DynamicMemoryEnabled $false
 Set-VMProcessor -VM $vm -Count $CPUcores
 
 # Mount the VHDX file
 $VHDXPath = Get-ChildItem -Path $VMDataFolder -Filter *.vhdx -File | Select-Object -First 1
-Add-VMHardDiskDrive -VM $vm -Path $VHDXPath
+Add-VMHardDiskDrive -VM $vm -Path $VHDXPath.FullName
 
 # Get the first Hyper-V network switch and attach the network adapter
 $NetworkSwitch = Get-VMSwitch | Select-Object -First 1
 $adapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
-Set-VMNetworkAdapter -SwitchName $NetworkSwitch.Name -VMNetworkAdapter $adapter
+Connect-VMNetworkAdapter -VMNetworkAdapter $adapter -VMSwitch $NetworkSwitch
 
 # If VLANId is set, configure VLAN on the network adapter
 if ($VLANId -ne $null) {
@@ -47,7 +45,7 @@ if ($ISOFile) {
 }
 
 # Set the first boot preference to the hard drive
-Set-VMFirmware -VM $vm -FirstBootDevice (Get-VMHardDiskDrive -VM $vm )
+Set-VMFirmware -VM $vm -FirstBootDevice (Get-VMHardDiskDrive -VM $vm | Select-Object -First 1)
 
 # Start the VM
 Start-VM -VM $vm
