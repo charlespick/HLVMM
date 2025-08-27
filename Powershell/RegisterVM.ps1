@@ -11,14 +11,14 @@ param (
     [Parameter(Mandatory=$true)]
     [string]$VHDXPath,
 
-    [Parameter(Mandatory=$true)]
-    [string]$VMName,
-
     [int]$VLANId = $null
 )
 
 # Extract the folder path of the VHDX file
 $VMFolderPath = Split-Path -Path $VHDXPath -Parent
+
+# Derive VMName from the parent folder of the VHDX path
+$VMName = Split-Path -Path $VMFolderPath -Leaf
 
 # Create the VM
 New-VM -Name $VMName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path $VMFolderPath
