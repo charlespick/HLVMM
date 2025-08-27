@@ -44,7 +44,7 @@ if ($TargetVolume.SharedVolumeInfo.Partition.Freespace -lt $ImageSize) {
 try {
     New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
     Copy-Item -Path $ImagePath -Destination $DestinationPath -Force
-    return Join-Path -Path $DestinationPath -ChildPath $ImageFilename
+    return $DestinationPath
 } catch {
     Write-Error "Failed to copy the image: $_"
     exit 1
