@@ -5,21 +5,16 @@ param (
     [string]$ImageName
 )
 
+$ImageFilename = $ImageName + ".vhdx"
+
 # Define static variables
-$StaticNetworkPath = "\\static\network\path"
+$StaticNetworkPath = "\\files01.makerad.makerland.xyz\Automation\VMImages"
 $StaticFolder = "hyperv"
 
 # Get the cluster shared volumes and identify the one with the largest free space
-$Volumes = Get-ClusterSharedVolume | ForEach-Object {
-    $Path = $_.SharedVolumeInfo.FriendlyVolumeName
-    $FreeSpace = (Get-PSDrive -Name $Path).Used - (Get-PSDrive -Name $Path).UsedSpace
-    [PSCustomObject]@{
-        Path      = $Path
-        FreeSpace = $FreeSpace
-    }
-}
-
-$TargetVolume = $Volumes | Sort-Object -Property FreeSpace -Descending | Select-Object -First 1
+$TargetVolume = Get-ClusterSharedVolume |
+    Sort-Object { $_.SharedVolumeInfo.Partition.FreeSpace } -Descending |
+    Select-Object -First 1
 
 if (-not $TargetVolume) {
     Write-Error "No cluster shared volumes found."
@@ -27,10 +22,10 @@ if (-not $TargetVolume) {
 }
 
 # Construct the destination path
-$DestinationPath = Join-Path -Path $TargetVolume.Path -ChildPath "$StaticFolder\$VMName"
+$DestinationPath = $TargetVolume.SharedVolumeInfo.FriendlyVolumeName
 
 # Ensure the destination has enough free space
-$ImagePath = Join-Path -Path $StaticNetworkPath -ChildPath $ImageName
+$ImagePath = Join-Path -Path $StaticNetworkPath -ChildPath $ImageFilename
 $ImageSize = (Get-Item $ImagePath).Length
 
 if ($TargetVolume.FreeSpace -lt $ImageSize) {
@@ -42,8 +37,7 @@ if ($TargetVolume.FreeSpace -lt $ImageSize) {
 try {
     New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
     Copy-Item -Path $ImagePath -Destination $DestinationPath -Force
-    Write-Host "Image copied successfully to $DestinationPath"
-    return Join-Path -Path $DestinationPath -ChildPath $ImageName
+    return Join-Path -Path $DestinationPath -ChildPath $ImageFilename
 } catch {
     Write-Error "Failed to copy the image: $_"
     exit 1

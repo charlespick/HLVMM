@@ -1,32 +1,12 @@
 param (
-    [Parameter(Mandatory = $true)]
-    [string]$GuestHostName,
-
-    [Parameter()]
     [string]$GuestV4IpAddr,
-
-    [Parameter()]
     [int]$GuestV4CidrPrefix,
-
-    [Parameter()]
     [string]$GuestV4DefaultGw,
-
-    [Parameter()]
     [string]$GuestV4Dns1,
-
-    [Parameter()]
     [string]$GuestV4Dns2,
-
-    [Parameter()]
     [string]$GuestNetDnsSuffix,
-
-    [Parameter()]
     [string]$GuestDomainJoinTarget,
-
-    [Parameter()]
     [string]$GuestDomainJoinUid,
-
-    [Parameter()]
     [string]$GuestDomainJoinPw,
 
     [Parameter(Mandatory = $true)]
@@ -96,6 +76,8 @@ function Publish-KvpEncryptedValue {
 }
 
 #region Provisioning Data Checksum Calculation and Publishing
+
+$GuestHostName = $VmName
 
 # Concatenate all provisioning data in a predictable order
 $provisioningData = @(
