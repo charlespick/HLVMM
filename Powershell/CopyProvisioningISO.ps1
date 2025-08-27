@@ -18,7 +18,7 @@ $StaticCDPath = Get-ChildItem -Path "C:\ClusterStorage" -Directory |
     Select-Object -First 1
 
 $LinuxISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
-$WindowsISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
+$WindowsISOPath = Join-Path -Path $StaticCDPath -ChildPath "WindowsProvisioning.iso"
 
 # Function to validate if a folder exists
 function Validate-Folder {
