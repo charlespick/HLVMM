@@ -162,7 +162,7 @@ function Get-RsaFromGuestProvisioningKey {
 
     # Remove whitespace/newlines
     $normalized = ($PublicKeyBase64 -replace '\s', '')
-    $keyBytes   = [Convert]::FromBase64String($normalized)
+    $keyBytes = [Convert]::FromBase64String($normalized)
 
     # Try to import as a CNG RSA public blob (works on Windows PowerShell 5.1)
     try {
@@ -175,7 +175,7 @@ function Get-RsaFromGuestProvisioningKey {
     catch {
         # If that fails and we're on PowerShell 7+ (method exists), try SPKI import
         $hasImportSpki = [System.Security.Cryptography.RSA].GetMethods() |
-            Where-Object { $_.Name -eq 'ImportSubjectPublicKeyInfo' }
+        Where-Object { $_.Name -eq 'ImportSubjectPublicKeyInfo' }
 
         if ($hasImportSpki) {
             try {
@@ -214,11 +214,10 @@ $provisioningData = @(
 
 # Compute a checksum of the concatenated data
 try {
-    $checksum = [System.BitConverter]::ToString(
-        [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-            [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
-        )
-    ).Replace("-", "").ToLower()
+    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
+    )
+    $checksum = [Convert]::ToBase64String($hash)
 }
 catch {
     throw "Failed to compute the checksum: $_"
@@ -262,8 +261,8 @@ catch {
 try {
     # Build an RSA object from the guest provisioning public key
     $rsa = Get-RsaFromGuestProvisioningKey -PublicKeyBase64 $guestProvisioningPublicKey
-    $aesKeyBytes = [Convert]::FromBase64String(($aesKey -replace '\s',''))
-    $wrappedBytes  = $rsa.Encrypt($aesKeyBytes, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
+    $aesKeyBytes = [Convert]::FromBase64String(($aesKey -replace '\s', ''))
+    $wrappedBytes = $rsa.Encrypt($aesKeyBytes, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
     $wrappedAesKey = [Convert]::ToBase64String($wrappedBytes)
 }
 catch {
