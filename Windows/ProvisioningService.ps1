@@ -39,40 +39,41 @@ function Decrypt-AesCbcWithPrependedIV {
         [Parameter(Mandatory)]
         [string]$CiphertextBase64,
 
-        [ValidateSet('Bytes','Utf8','Ascii','Unicode','Utf7','Utf32','Latin1')]
+        [ValidateSet('Bytes', 'Utf8', 'Ascii', 'Unicode', 'Utf7', 'Utf32', 'Latin1')]
         [string]$Output = 'Utf8'
     )
 
     [byte[]]$Key = [Convert]::FromBase64String($AesKey)
-    $allBytes = [Convert]::FromBase64String(($CiphertextBase64 -replace '\s',''))
+    $allBytes = [Convert]::FromBase64String(($CiphertextBase64 -replace '\s', ''))
 
     if ($allBytes.Length -lt 16) {
         throw "Ciphertext too short: missing IV."
     }
 
     [byte[]]$iv = $allBytes[0..15]
-    [byte[]]$cipherBytes = $allBytes[16..($allBytes.Length-1)]
+    [byte[]]$cipherBytes = $allBytes[16..($allBytes.Length - 1)]
 
     # AES config
     $aes = [System.Security.Cryptography.Aes]::Create()
-    $aes.Mode    = 'CBC'
+    $aes.Mode = 'CBC'
     $aes.Padding = 'PKCS7'
-    $aes.Key     = $Key
-    $aes.IV      = $iv
+    $aes.Key = $Key
+    $aes.IV = $iv
     try {
         $decryptor = $aes.CreateDecryptor()
-        $plainBytes = $decryptor.TransformFinalBlock($cipherBytes,0,$cipherBytes.Length)
-    } finally {
+        $plainBytes = $decryptor.TransformFinalBlock($cipherBytes, 0, $cipherBytes.Length)
+    }
+    finally {
         $aes.Dispose()
     }
 
     switch ($Output) {
-        'Bytes'  { return $plainBytes }
-        'Utf8'   { return [System.Text.Encoding]::UTF8.GetString($plainBytes) }
-        'Ascii'  { return [System.Text.Encoding]::ASCII.GetString($plainBytes) }
-        'Unicode'{ return [System.Text.Encoding]::Unicode.GetString($plainBytes) }
-        'Utf7'   { return [System.Text.Encoding]::UTF7.GetString($plainBytes) }
-        'Utf32'  { return [System.Text.Encoding]::UTF32.GetString($plainBytes) }
+        'Bytes' { return $plainBytes }
+        'Utf8' { return [System.Text.Encoding]::UTF8.GetString($plainBytes) }
+        'Ascii' { return [System.Text.Encoding]::ASCII.GetString($plainBytes) }
+        'Unicode' { return [System.Text.Encoding]::Unicode.GetString($plainBytes) }
+        'Utf7' { return [System.Text.Encoding]::UTF7.GetString($plainBytes) }
+        'Utf32' { return [System.Text.Encoding]::UTF32.GetString($plainBytes) }
         'Latin1' { return [System.Text.Encoding]::GetEncoding('ISO-8859-1').GetString($plainBytes) }
     }
 }
@@ -133,18 +134,18 @@ switch ($status["last_completed_phase"]) {
 
         # Define the keys to decrypt
         $keysToDecrypt = @(
-            "guesthostname",
-            "Guestv4ipaddr",
-            "Guestv4cdirprefix",
-            "Guestv4defaultgw",
-            "Guestv4dns1",
-            "Guestv4dns2",
-            "Guestnetdnssuffix",
-            "guestdomainjointarget",
-            "guestdomainjoinuid",
-            "guestdomainjoinpw",
-            "Guestlauid",
-            "guestlapw"
+            "GuestHostName",
+            "GuestV4IpAddr",
+            "GuestV4CidrPrefix",
+            "GuestV4DefaultGw",
+            "GuestV4Dns1",
+            "GuestV4Dns2",
+            "GuestNetDnsSuffix",
+            "GuestDomainJoinTarget",
+            "GuestDomainJoinUid",
+            "GuestDomainJoinPw",
+            "GuestLaUid",
+            "GuestLaPw"
         )
 
         # Decrypt and process each key

@@ -1,6 +1,6 @@
 param (
     [string]$GuestV4IpAddr,
-    [int]$GuestV4CidrPrefix,
+    [string]$GuestV4CidrPrefix,
     [string]$GuestV4DefaultGw,
     [string]$GuestV4Dns1,
     [string]$GuestV4Dns2,
