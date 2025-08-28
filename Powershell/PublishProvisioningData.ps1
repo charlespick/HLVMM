@@ -54,7 +54,6 @@ function Set-VMKeyValuePair {
 
     if (-not $vm) { throw "VM '$VMName' not found." }
 
-    # Enumerate existing host->guest custom KVPs (HostExchangeItems) using your sample approach
     $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
     $hostItems = @($kvpSettings.HostExchangeItems)
 
@@ -90,7 +89,6 @@ function Set-VMKeyValuePair {
     $null = $VmMgmt.AddKvpItems($vm, $kvpDataItem.PSBase.GetText(1))
 }
 
-# TODO: this currently only reads from the host side pool, I want it to read from both pools and merge somehow
 function Get-VMKeyValuePair {
     param (
         [Parameter(Mandatory = $true)]
@@ -99,15 +97,11 @@ function Get-VMKeyValuePair {
         [Parameter(Mandatory = $true)]
         [string]$Name
     )
-    $VmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class `
-        Msvm_VirtualSystemManagementService
     $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
         Msvm_ComputerSystem -Filter "ElementName='$VMName'"
-    ($vm.GetRelated("Msvm_KvpExchangeComponent")[0] `
-    ).GetRelated("Msvm_KvpExchangeComponentSettingData").HostExchangeItems | % { `
+    $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
             $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$name']")
-
+                "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
         if ($GuestExchangeItemXml -ne $null) {
             $GuestExchangeItemXml.SelectSingleNode(`
                     "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
