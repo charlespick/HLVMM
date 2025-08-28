@@ -93,6 +93,8 @@ phase_one() {
         return 1
     fi
 
+    # TODO: Consider not saving keys to disk, I don't think they need to be kept if we can find a way to keep them in memory in bash
+
     # Generate a public/private key pair
     key_dir="/var/lib/hyperv/keys"
     mkdir -p "$key_dir"
