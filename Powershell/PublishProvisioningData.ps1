@@ -90,6 +90,7 @@ function Set-VMKeyValuePair {
     $null = $VmMgmt.AddKvpItems($vm, $kvpDataItem.PSBase.GetText(1))
 }
 
+# TODO: this currently only reads from the host side pool, I want it to read from both pools and merge somehow
 function Get-VMKeyValuePair {
     param (
         [Parameter(Mandatory = $true)]
