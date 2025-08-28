@@ -1,0 +1,13 @@
+---
+- name: Download and execute PowerShell script
+  hosts: all
+  tasks:
+    - name: Download the PowerShell script
+      win_get_url:
+        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/Scripts/InstallHostScripts.ps1
+        dest: C:\Temp\InstallHostScripts.ps1
+
+    - name: Execute the PowerShell script
+      win_shell: |
+        powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostScripts.ps1
+        
