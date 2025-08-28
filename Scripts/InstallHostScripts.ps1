@@ -33,6 +33,11 @@ if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
     # Delete all files in the install directory
     Get-ChildItem -Path $installDirectory -Recurse | Remove-Item -Force -Recurse
 
+    # Ensure install directory exists
+    if (-not (Test-Path $installDirectory)) {
+        New-Item -Path $installDirectory -ItemType Directory -Force | Out-Null
+    }
+
     # Download and save each file from the Powershell directory
     foreach ($file in $powershellFiles) {
         if ($file.type -eq "file") {
