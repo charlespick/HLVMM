@@ -272,7 +272,7 @@ catch {
 
 # Publish the wrapped AES key to the KVP
 try {
-    Set-VMKeyValuePair -VMName $VmName -Name "sharedaeskey" -Value $wrappedAesKey
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "sharedaeskey" -Value $wrappedAesKey
     Write-Host "Successfully published wrapped AES key to KVP as 'sharedaeskey'."
 }
 catch {
