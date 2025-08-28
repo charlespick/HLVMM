@@ -11,15 +11,11 @@
         -ImageName "{{ image_name }}"
       register: copyimage_result
 
-    - name: Extract path
-      set_fact:
-        vm_data_folder: "{{ copyimage_result.stdout | trim }}"
-
     - name: Run CopyProvisioningISO.ps1
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\CopyProvisioningISO.ps1"
         -OSFamily {{ os_family }}
-        -VMDataFolder "{{ vm_data_folder }}"
+        -VMDataFolder "{{ copyimage_result.stdout | trim }}"
 
     - name: Run RegisterVM.ps1
       ansible.windows.win_command: >
@@ -27,7 +23,7 @@
         -OSFamily "{{ os_family }}"
         -GBRam {{ gb_ram }}
         -CPUcores {{ cpu_cores }}
-        -VMDataFolder "{{ vm_data_folder }}"
+        -VMDataFolder "{{ copyimage_result.stdout | trim }}"
         {% if vlan_id is defined and vlan_id|length > 0 %}-VLANId {{ vlan_id }}{% endif %}
 
     - name: Run WaitForProvisioningKey.ps1

@@ -118,7 +118,6 @@ switch ($status.last_completed_phase) {
 
         Write-HyperVKvp -Key "guestprovisioningstate" -Value "waitingforaeskey"
 
-
         while ($true) {
             $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
             if ($state -eq "provisioningdatapublished") {
@@ -318,34 +317,34 @@ switch ($status.last_completed_phase) {
         if (Test-Path $guestDomainJoinTargetPath) {
             $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
             if ($guestDomainJoinTarget) {
-            # Retrieve the domain join credentials
-            $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinUid.txt"
-            $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinPw.txt"
+                # Retrieve the domain join credentials
+                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinUid.txt"
+                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinPw.txt"
 
-            if (Test-Path $guestDomainJoinUidPath -and Test-Path $guestDomainJoinPwPath) {
-                $guestDomainJoinUid = Get-Content -Path $guestDomainJoinUidPath
-                $guestDomainJoinPw = Get-Content -Path $guestDomainJoinPwPath
+                if (Test-Path $guestDomainJoinUidPath -and Test-Path $guestDomainJoinPwPath) {
+                    $guestDomainJoinUid = Get-Content -Path $guestDomainJoinUidPath
+                    $guestDomainJoinPw = Get-Content -Path $guestDomainJoinPwPath
 
-                if ($guestDomainJoinUid -and $guestDomainJoinPw) {
-                # Attempt to join the domain
-                try {
-                    Add-Computer -DomainName $guestDomainJoinTarget -Credential (New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, (ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force))) -Force -ErrorAction Stop
-                    Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
-                }
-                catch {
-                    Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
-                }
+                    if ($guestDomainJoinUid -and $guestDomainJoinPw) {
+                        # Attempt to join the domain
+                        try {
+                            Add-Computer -DomainName $guestDomainJoinTarget -Credential (New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, (ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force))) -Force -ErrorAction Stop
+                            Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
+                        }
+                        catch {
+                            Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
+                        }
+                    }
+                    else {
+                        Write-Host "Domain join credentials are incomplete. Skipping domain join."
+                    }
                 }
                 else {
-                Write-Host "Domain join credentials are incomplete. Skipping domain join."
+                    Write-Host "Domain join credential files are missing. Skipping domain join."
                 }
             }
             else {
-                Write-Host "Domain join credential files are missing. Skipping domain join."
-            }
-            }
-            else {
-            Write-Host "GuestDomainJoinTarget file is empty. Skipping domain join."
+                Write-Host "GuestDomainJoinTarget file is empty. Skipping domain join."
             }
         }
         else {
