@@ -1,6 +1,6 @@
 ---
 - name: Download and execute PowerShell script
-  hosts: all
+  hosts: hyperv_hosts
   tasks:
     - name: Download the PowerShell script
       win_get_url:
