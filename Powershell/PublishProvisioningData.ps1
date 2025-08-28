@@ -17,7 +17,7 @@ param (
     [string]$GuestLaPw,
 
     [Parameter(Mandatory = $true)]
-    [string]$VmName
+    [string]$GuestHostName
 )
 
 # Validate IP settings if any IP-related parameter is provided
@@ -196,8 +196,6 @@ function Get-RsaFromGuestProvisioningKey {
 
 #region Provisioning Data Checksum Calculation and Publishing
 
-$GuestHostName = $VmName
-
 # Concatenate all provisioning data in a predictable order
 $provisioningData = @(
     $GuestHostName,
@@ -228,8 +226,8 @@ catch {
 
 # Publish the checksum to the KVP
 try {
-    Set-VMKeyValuePair -VMName $VmName -Name "provisioningsystemchecksum" -Value $checksum
-    Write-Host "Successfully published checksum for provisioning data on VM '$VmName'."
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "provisioningsystemchecksum" -Value $checksum
+    Write-Host "Successfully published checksum for provisioning data on VM '$GuestHostName'."
 }
 catch {
     throw "Failed to publish the provisioning system checksum: $_"
@@ -290,7 +288,7 @@ foreach ($paramName in $PSBoundParameters.Keys) {
     # Skip publishing if the parameter value is null or empty
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         try {
-            Publish-KvpEncryptedValue -VmName $VmName -Key $paramName -Value $paramValue -AesKey $aesKey
+            Publish-KvpEncryptedValue -VmName $GuestHostName -Key $paramName -Value $paramValue -AesKey $aesKey
         }
         catch {
             Write-Host "Failed to publish encrypted value for parameter '$paramName': $_"
@@ -300,7 +298,7 @@ foreach ($paramName in $PSBoundParameters.Keys) {
 
 # Publish the host provisioning system state to the KVP
 try {
-    Set-VMKeyValuePair -VMName $VmName -Name "hostprovisioningsystemstate" -Value "provisioningdatapublished"
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hostprovisioningsystemstate" -Value "provisioningdatapublished"
     Write-Host "Provisioning system state 'provisioningdatapublished'."
 }
 catch {
