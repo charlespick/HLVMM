@@ -264,17 +264,9 @@ catch {
 try {
     # Build an RSA object from the guest provisioning public key
     $rsa = Get-RsaFromGuestProvisioningKey -PublicKeyBase64 $guestProvisioningPublicKey
-
-    # Convert AES key from Base64 -> bytes
     $aesKeyBytes = [Convert]::FromBase64String(($aesKey -replace '\s',''))
-
-    # Encrypt (RSAES-PKCS1-v1_5)
     $wrappedBytes  = $rsa.Encrypt($aesKeyBytes, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
     $wrappedAesKey = [Convert]::ToBase64String($wrappedBytes)
-
-    Write-Host "Wrapped AES key using guest provisioning public key."
-    # Output the wrapped key (Base64)
-    $wrappedAesKey
 }
 catch {
     throw "Failed to wrap the AES key: $($_.Exception.Message)"
