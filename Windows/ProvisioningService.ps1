@@ -33,62 +33,39 @@ function Decrypt-AesCbcWithPrependedIV {
     [CmdletBinding()]
     [OutputType([string], [byte[]])]
     param(
-        # AES key bytes (16, 24, or 32 bytes for AES-128/192/256)
         [Parameter(Mandatory)]
-        [byte[]]$Key,
+        [string]$AesKey,
 
-        # Base64-encoded string where the first 16 bytes are the IV, followed by ciphertext
         [Parameter(Mandatory)]
         [string]$CiphertextBase64,
 
-        # Output format: 'Utf8' (default) returns a string; 'Bytes' returns raw byte[]
         [ValidateSet('Bytes','Utf8','Ascii','Unicode','Utf7','Utf32','Latin1')]
         [string]$Output = 'Utf8'
     )
 
-    # 1) Decode Base64 (strip whitespace/newlines just to be safe)
+    [byte[]]$Key = [Convert]::FromBase64String($AesKey)
     $allBytes = [Convert]::FromBase64String(($CiphertextBase64 -replace '\s',''))
 
-    # 2) Validate sizes
     if ($allBytes.Length -lt 16) {
-        throw "Ciphertext too short: missing IV (need at least 16 bytes)."
-    }
-    if ($Key.Length -notin 16,24,32) {
-        throw "Invalid AES key length $($Key.Length). Expected 16/24/32 bytes."
+        throw "Ciphertext too short: missing IV."
     }
 
-    # 3) Split IV (first 16 bytes) and cipher payload (rest)
-    [byte[]]$iv = New-Object byte[] 16
-    [Array]::Copy($allBytes, 0, $iv, 0, 16)
+    [byte[]]$iv = $allBytes[0..15]
+    [byte[]]$cipherBytes = $allBytes[16..($allBytes.Length-1)]
 
-    [byte[]]$cipherBytes = New-Object byte[] ($allBytes.Length - 16)
-    if ($cipherBytes.Length -gt 0) {
-        [Array]::Copy($allBytes, 16, $cipherBytes, 0, $cipherBytes.Length)
-    } else {
-        throw "Ciphertext payload is empty after IV."
-    }
-
-    # 4) Configure AES (Windows PowerShell friendly)
-    $aes = New-Object System.Security.Cryptography.AesCryptoServiceProvider
-    $aes.Mode    = [System.Security.Cryptography.CipherMode]::CBC
-    $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+    # AES config
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    $aes.Mode    = 'CBC'
+    $aes.Padding = 'PKCS7'
     $aes.Key     = $Key
     $aes.IV      = $iv
     try {
         $decryptor = $aes.CreateDecryptor()
-        try {
-            # 5) Decrypt
-            $plainBytes = $decryptor.TransformFinalBlock($cipherBytes, 0, $cipherBytes.Length)
-        } catch [System.Security.Cryptography.CryptographicException] {
-            throw "AES decryption failed (invalid key/IV/ciphertext or wrong padding/mode): $($_.Exception.Message)"
-        } finally {
-            if ($decryptor) { $decryptor.Dispose() }
-        }
+        $plainBytes = $decryptor.TransformFinalBlock($cipherBytes,0,$cipherBytes.Length)
     } finally {
-        if ($aes) { $aes.Dispose() }
+        $aes.Dispose()
     }
 
-    # 6) Return in requested format
     switch ($Output) {
         'Bytes'  { return $plainBytes }
         'Utf8'   { return [System.Text.Encoding]::UTF8.GetString($plainBytes) }
@@ -99,6 +76,7 @@ function Decrypt-AesCbcWithPrependedIV {
         'Latin1' { return [System.Text.Encoding]::GetEncoding('ISO-8859-1').GetString($plainBytes) }
     }
 }
+
 
 $PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
 if (-not (Test-Path $PhaseFile)) {
@@ -126,7 +104,6 @@ switch ($status["last_completed_phase"]) {
 
         # Generate RSA key pair and keep them in memory
         $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
-        $privateKey = $rsa.ExportCspBlob($true)
         $publicKey = $rsa.ExportCspBlob($false)
 
         # Convert public key to Base64 and write it to the KVP
@@ -152,7 +129,7 @@ switch ($status["last_completed_phase"]) {
         }
 
         $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
-        $unwrappedAesKey = $rsa.Decrypt($sharedAesKey, $false)
+        $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
 
         # Define the keys to decrypt
         $keysToDecrypt = @(
@@ -177,7 +154,7 @@ switch ($status["last_completed_phase"]) {
                 Write-Host "Failed to retrieve encrypted value for key: $key. Skipping..."
                 continue
             }
-            $decryptedValue = Decrypt-AesCbcWithPrependedIV -Key $unwrappedAesKey -CiphertextBase64 $encryptedValueBase64 -Output Utf8
+            $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $unwrappedAesKey -CiphertextBase64 $encryptedValueBase64 -Output Utf8
             $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$key.txt")
             [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
         }
