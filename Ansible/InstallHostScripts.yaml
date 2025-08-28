@@ -2,6 +2,10 @@
 - name: Download and execute PowerShell script
   hosts: hyperv_hosts
   tasks:
+    - name: Ensure C:\Temp exists
+      win_file:
+        path: C:\Temp
+        state: directory
     - name: Download the PowerShell script
       win_get_url:
         url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/Scripts/InstallHostScripts.ps1
