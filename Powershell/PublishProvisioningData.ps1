@@ -153,6 +153,47 @@ function Publish-KvpEncryptedValue {
     }
 }
 
+function Get-RsaFromGuestProvisioningKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$PublicKeyBase64
+    )
+
+    # Remove whitespace/newlines
+    $normalized = ($PublicKeyBase64 -replace '\s', '')
+    $keyBytes   = [Convert]::FromBase64String($normalized)
+
+    # Try to import as a CNG RSA public blob (works on Windows PowerShell 5.1)
+    try {
+        $cngKey = [System.Security.Cryptography.CngKey]::Import(
+            $keyBytes,
+            [System.Security.Cryptography.CngKeyBlobFormat]::GenericPublicBlob
+        )
+        return [System.Security.Cryptography.RSACng]::new($cngKey)
+    }
+    catch {
+        # If that fails and we're on PowerShell 7+ (method exists), try SPKI import
+        $hasImportSpki = [System.Security.Cryptography.RSA].GetMethods() |
+            Where-Object { $_.Name -eq 'ImportSubjectPublicKeyInfo' }
+
+        if ($hasImportSpki) {
+            try {
+                $rsa = [System.Security.Cryptography.RSA]::Create()
+                $bytesRead = 0
+                $rsa.ImportSubjectPublicKeyInfo($keyBytes, [ref]$bytesRead)
+                if ($bytesRead -le 0) { throw "ImportSubjectPublicKeyInfo read 0 bytes." }
+                return $rsa
+            }
+            catch {
+                throw "Tried SPKI ImportSubjectPublicKeyInfo but failed: $($_.Exception.Message)"
+            }
+        }
+
+        throw "Public key isn't a CNG RSA public blob this runtime can import. Inner: $($_.Exception.Message)"
+    }
+}
+
 #region Provisioning Data Checksum Calculation and Publishing
 
 $GuestHostName = $VmName
@@ -209,7 +250,7 @@ catch {
 
 # Retrieve the guest provisioning public key from the KVP
 try {
-    $guestProvisioningPublicKey = Get-VMKeyValuePair -VMName $VmName -Name "guestprovisioningpublickey" | Select-Object -ExpandProperty Value
+    $guestProvisioningPublicKey = Get-VMKeyValuePair -VMName $VmName -Name "guestprovisioningpublickey"
     if (-not $guestProvisioningPublicKey) {
         throw "Guest provisioning public key is not set in the KVP."
     }
@@ -221,13 +262,22 @@ catch {
 
 # Wrap the AES key using the guest provisioning public key
 try {
-    $rsa = [System.Security.Cryptography.RSA]::Create()
-    $rsa.ImportSubjectPublicKeyInfo([Convert]::FromBase64String($guestProvisioningPublicKey), [ref]0)
-    $wrappedAesKey = [Convert]::ToBase64String($rsa.Encrypt([Convert]::FromBase64String($aesKey), [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1))
+    # Build an RSA object from the guest provisioning public key
+    $rsa = Get-RsaFromGuestProvisioningKey -PublicKeyBase64 $guestProvisioningPublicKey
+
+    # Convert AES key from Base64 -> bytes
+    $aesKeyBytes = [Convert]::FromBase64String(($aesKey -replace '\s',''))
+
+    # Encrypt (RSAES-PKCS1-v1_5)
+    $wrappedBytes  = $rsa.Encrypt($aesKeyBytes, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
+    $wrappedAesKey = [Convert]::ToBase64String($wrappedBytes)
+
     Write-Host "Wrapped AES key using guest provisioning public key."
+    # Output the wrapped key (Base64)
+    $wrappedAesKey
 }
 catch {
-    throw "Failed to wrap the AES key: $_"
+    throw "Failed to wrap the AES key: $($_.Exception.Message)"
 }
 
 # Publish the wrapped AES key to the KVP

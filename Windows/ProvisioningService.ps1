@@ -1,4 +1,3 @@
-# Read Hyper-V KVP (Guest Side)
 function Read-HyperVKvp {
     param(
         [Parameter(Mandatory = $true)][string]$Key
@@ -8,7 +7,6 @@ function Read-HyperVKvp {
     (Get-ItemProperty -Path $regPath -Name $Key).$Key
 }
 
-# Write Hyper-V KVP (Guest Side)
 function Write-HyperVKvp {
     param(
         [Parameter(Mandatory = $true)][string]$Key, 
@@ -19,16 +17,11 @@ function Write-HyperVKvp {
     Set-ItemProperty -Path $regPath -Name $Key -Value $Value -Type String
 }
 
-# Phase tracking file
-$PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
-if (-not (Test-Path $PhaseFile)) {
-    Set-Content $PhaseFile "last_started_phase=nophasestartedyet`nlast_completed_phase=nophasestartedyet"
-}
-
 function Get-PhaseStatus {
     $status = Get-Content $PhaseFile | ConvertFrom-StringData
     return $status
 }
+
 function Set-PhaseStatus {
     param($Key, $Value)
     $status = Get-Content $PhaseFile | ConvertFrom-StringData
@@ -36,7 +29,82 @@ function Set-PhaseStatus {
     $status.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } | Set-Content $PhaseFile
 }
 
-# --- Main Phase Control ---
+function Decrypt-AesCbcWithPrependedIV {
+    [CmdletBinding()]
+    [OutputType([string], [byte[]])]
+    param(
+        # AES key bytes (16, 24, or 32 bytes for AES-128/192/256)
+        [Parameter(Mandatory)]
+        [byte[]]$Key,
+
+        # Base64-encoded string where the first 16 bytes are the IV, followed by ciphertext
+        [Parameter(Mandatory)]
+        [string]$CiphertextBase64,
+
+        # Output format: 'Utf8' (default) returns a string; 'Bytes' returns raw byte[]
+        [ValidateSet('Bytes','Utf8','Ascii','Unicode','Utf7','Utf32','Latin1')]
+        [string]$Output = 'Utf8'
+    )
+
+    # 1) Decode Base64 (strip whitespace/newlines just to be safe)
+    $allBytes = [Convert]::FromBase64String(($CiphertextBase64 -replace '\s',''))
+
+    # 2) Validate sizes
+    if ($allBytes.Length -lt 16) {
+        throw "Ciphertext too short: missing IV (need at least 16 bytes)."
+    }
+    if ($Key.Length -notin 16,24,32) {
+        throw "Invalid AES key length $($Key.Length). Expected 16/24/32 bytes."
+    }
+
+    # 3) Split IV (first 16 bytes) and cipher payload (rest)
+    [byte[]]$iv = New-Object byte[] 16
+    [Array]::Copy($allBytes, 0, $iv, 0, 16)
+
+    [byte[]]$cipherBytes = New-Object byte[] ($allBytes.Length - 16)
+    if ($cipherBytes.Length -gt 0) {
+        [Array]::Copy($allBytes, 16, $cipherBytes, 0, $cipherBytes.Length)
+    } else {
+        throw "Ciphertext payload is empty after IV."
+    }
+
+    # 4) Configure AES (Windows PowerShell friendly)
+    $aes = New-Object System.Security.Cryptography.AesCryptoServiceProvider
+    $aes.Mode    = [System.Security.Cryptography.CipherMode]::CBC
+    $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+    $aes.Key     = $Key
+    $aes.IV      = $iv
+    try {
+        $decryptor = $aes.CreateDecryptor()
+        try {
+            # 5) Decrypt
+            $plainBytes = $decryptor.TransformFinalBlock($cipherBytes, 0, $cipherBytes.Length)
+        } catch [System.Security.Cryptography.CryptographicException] {
+            throw "AES decryption failed (invalid key/IV/ciphertext or wrong padding/mode): $($_.Exception.Message)"
+        } finally {
+            if ($decryptor) { $decryptor.Dispose() }
+        }
+    } finally {
+        if ($aes) { $aes.Dispose() }
+    }
+
+    # 6) Return in requested format
+    switch ($Output) {
+        'Bytes'  { return $plainBytes }
+        'Utf8'   { return [System.Text.Encoding]::UTF8.GetString($plainBytes) }
+        'Ascii'  { return [System.Text.Encoding]::ASCII.GetString($plainBytes) }
+        'Unicode'{ return [System.Text.Encoding]::Unicode.GetString($plainBytes) }
+        'Utf7'   { return [System.Text.Encoding]::UTF7.GetString($plainBytes) }
+        'Utf32'  { return [System.Text.Encoding]::UTF32.GetString($plainBytes) }
+        'Latin1' { return [System.Text.Encoding]::GetEncoding('ISO-8859-1').GetString($plainBytes) }
+    }
+}
+
+$PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
+if (-not (Test-Path $PhaseFile)) {
+    Set-Content $PhaseFile "last_started_phase=nophasestartedyet`nlast_completed_phase=nophasestartedyet"
+}
+
 $status = Get-PhaseStatus
 switch ($status["last_completed_phase"]) {
     "nophasestartedyet" {
@@ -69,7 +137,7 @@ switch ($status["last_completed_phase"]) {
 
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
             if ($state -eq "provisioningdatapublished") {
                 break
             }
@@ -83,12 +151,8 @@ switch ($status["last_completed_phase"]) {
             exit
         }
 
-        # Convert the Base64-encoded AES key to a byte array
-        $sharedAesKey = [Convert]::FromBase64String($sharedAesKeyBase64)
-        # Unwrap the shared AES key using the private RSA key
-        $privateRsa = [System.Security.Cryptography.RSA]::Create()
-        $privateRsa.ImportRSAPrivateKey($privateKey, [ref]$null)
-        $unwrappedAesKey = $privateRsa.Decrypt($sharedAesKey, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
+        $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
+        $unwrappedAesKey = $rsa.Decrypt($sharedAesKey, $false)
 
         # Define the keys to decrypt
         $keysToDecrypt = @(
@@ -113,13 +177,9 @@ switch ($status["last_completed_phase"]) {
                 Write-Host "Failed to retrieve encrypted value for key: $key. Skipping..."
                 continue
             }
-
-            $encryptedValue = [Convert]::FromBase64String($encryptedValueBase64)
-            $decryptedValue = $unwrappedAesKey.Decrypt($encryptedValue, [System.Security.Cryptography.CipherMode]::CBC)
-            $decryptedValueString = [System.Text.Encoding]::UTF8.GetString($decryptedValue)
+            $decryptedValue = Decrypt-AesCbcWithPrependedIV -Key $unwrappedAesKey -CiphertextBase64 $encryptedValueBase64 -Output Utf8
             $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$key.txt")
-            [System.IO.File]::WriteAllText($outputFilePath, $decryptedValueString)
-
+            [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
         }
 
         $decryptedKeysDir = "C:\ProgramData\HyperV"
