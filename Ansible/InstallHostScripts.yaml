@@ -6,6 +6,10 @@
       win_file:
         path: C:\Temp
         state: directory
+    - name: Delete old version of script
+      win_file:
+        path: C:\Temp\InstallHostScripts.ps1
+        state: absent
     - name: Download the PowerShell script
       changed_when: false
       win_get_url:
