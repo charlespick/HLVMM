@@ -248,7 +248,7 @@ catch {
 
 # Retrieve the guest provisioning public key from the KVP
 try {
-    $guestProvisioningPublicKey = Get-VMKeyValuePair -VMName $VmName -Name "guestprovisioningpublickey"
+    $guestProvisioningPublicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "guestprovisioningpublickey"
     if (-not $guestProvisioningPublicKey) {
         throw "Guest provisioning public key is not set in the KVP."
     }
