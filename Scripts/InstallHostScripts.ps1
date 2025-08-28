@@ -10,6 +10,14 @@ function Compare-Version {
         [string]$localVersion,
         [string]$repoVersion
     )
+
+    if ([string]::IsNullOrWhiteSpace($repoVersion)) {
+        throw "Repository version is null or empty. Cannot compare."
+    }
+    if ([string]::IsNullOrWhiteSpace($localVersion)) {
+        throw "Local version is null or empty. Cannot compare."
+    }
+
     return [version]$repoVersion -gt [version]$localVersion
 }
 
@@ -21,7 +29,7 @@ if (Test-Path $localVersionFile) {
 }
 
 # Get repo version
-$repoVersion = Invoke-RestMethod -Uri $repoVersionUrl -Method Get -UseBasicParsing
+$repoVersion = Invoke-RestMethod -Uri ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random)) -Method Get -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache"; "User-Agent" = "PowerShell" }
 
 # Compare versions
 if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {

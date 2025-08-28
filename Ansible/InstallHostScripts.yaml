@@ -14,7 +14,7 @@
     - name: Download the PowerShell script
       changed_when: false
       win_get_url:
-        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/Scripts/InstallHostScripts.ps1
+        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/Scripts/InstallHostScripts.ps1?nocache={{ 9999999 | random }}
         dest: C:\Temp\InstallHostScripts.ps1
 
     - name: Execute the PowerShell script
