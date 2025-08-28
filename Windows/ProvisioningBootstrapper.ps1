@@ -1,6 +1,6 @@
 # Define variables
 $CDROMPath   = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$TargetPath  = "C:\ProgramData\Provisioning"
+$TargetPath  = "C:\ProgramData\HyperV"
 $ScriptName  = "ProvisioningService.ps1"
 $TaskName    = "ProvisioningService"
 

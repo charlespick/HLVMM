@@ -78,14 +78,19 @@ function Decrypt-AesCbcWithPrependedIV {
     }
 }
 
-
 $PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
+$PhaseDir = [System.IO.Path]::GetDirectoryName($PhaseFile)
+
+if (-not (Test-Path $PhaseDir)) {
+    New-Item -ItemType Directory -Path $PhaseDir -Force | Out-Null
+}
+
 if (-not (Test-Path $PhaseFile)) {
     Set-Content $PhaseFile "last_started_phase=nophasestartedyet`nlast_completed_phase=nophasestartedyet"
 }
 
 $status = Get-PhaseStatus
-switch ($status["last_completed_phase"]) {
+switch ($status.last_completed_phase) {
     "nophasestartedyet" {
         Set-PhaseStatus "last_started_phase" "phase_one"
 
@@ -183,7 +188,122 @@ switch ($status["last_completed_phase"]) {
             exit
         }
 
-        # all the actual configuration goes here
+        #region: Configure hostname 
+        # Check if the "GuestHostName" key exists and set the hostname
+        $guestHostNamePath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestHostName.txt"
+        if (Test-Path $guestHostNamePath) {
+            $guestHostName = Get-Content -Path $guestHostNamePath
+            if ($guestHostName) {
+                Rename-Computer -NewName $guestHostName -Force
+                Write-Host "Hostname set to: $guestHostName"
+            }
+            else {
+                Write-Host "GuestHostName file is empty. Skipping hostname configuration."
+            }
+        }
+        else {
+            Write-Host "GuestHostName key does not exist. Skipping hostname configuration."
+        }
+        #endregion
+        
+        #region: Configure network
+        # Check if the IP address is defined
+        $guestV4IpAddrPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4IpAddr.txt"
+        if (Test-Path $guestV4IpAddrPath) {
+            $guestV4IpAddr = Get-Content -Path $guestV4IpAddrPath
+            if ($guestV4IpAddr) {
+                # Retrieve other network settings
+                $guestV4CidrPrefix = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4CidrPrefix.txt")
+                $guestV4DefaultGw = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4DefaultGw.txt")
+                $guestV4Dns1 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4Dns1.txt")
+                $guestV4Dns2 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4Dns2.txt")
+
+                # Configure the network adapter
+                $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+                if ($adapter) {
+                    $ipAddressWithPrefix = "$guestV4IpAddr/$guestV4CidrPrefix"
+                    New-NetIPAddress -InterfaceAlias $adapter.Name -IPAddress $guestV4IpAddr -PrefixLength $guestV4CidrPrefix -DefaultGateway $guestV4DefaultGw -ErrorAction Stop
+                    Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses @($guestV4Dns1, $guestV4Dns2) -ErrorAction Stop
+                    Write-Host "Network adapter configured with IP: $ipAddressWithPrefix, Gateway: $guestV4DefaultGw, DNS: $guestV4Dns1, $guestV4Dns2"
+                }
+                else {
+                    Write-Host "No active network adapter found. Skipping network configuration."
+                }
+            }
+            else {
+                Write-Host "GuestV4IpAddr file is empty. Skipping network configuration."
+            }
+        }
+        else {
+            Write-Host "GuestV4IpAddr key does not exist. Skipping network configuration."
+        }
+        #endregion
+
+        #region: Configure local account
+        # Check if the "GuestLaUid" key exists
+        $guestLaUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestLaUid.txt"
+        if (Test-Path $guestLaUidPath) {
+            $guestLaUid = Get-Content -Path $guestLaUidPath
+            if ($guestLaUid) {
+                # Retrieve the password for the account
+                $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestLaPw.txt"
+                if (Test-Path $guestLaPwPath) {
+                    $guestLaPw = Get-Content -Path $guestLaPwPath
+                    if ($guestLaPw) {
+                        # Check if the user already exists
+                        $user = Get-LocalUser -Name $guestLaUid -ErrorAction SilentlyContinue
+                        if (-not $user) {
+                            # Create the user if it doesn't exist
+                            New-LocalUser -Name $guestLaUid -Password (ConvertTo-SecureString -String $guestLaPw -AsPlainText -Force) -PasswordNeverExpires -ErrorAction Stop
+                            Write-Host "Local account $guestLaUid created."
+                        }
+                        else {
+                            # Update the password for the existing user
+                            $user | Set-LocalUser -Password (ConvertTo-SecureString -String $guestLaPw -AsPlainText -Force)
+                            Write-Host "Password updated for existing user $guestLaUid."
+                        }
+
+                        # Ensure the user is an administrator
+                        $adminGroup = Get-LocalGroup -Name "Administrators"
+                        if (-not ($adminGroup | Get-LocalGroupMember | Where-Object { $_.Name -eq $guestLaUid })) {
+                            Add-LocalGroupMember -Group "Administrators" -Member $guestLaUid -ErrorAction Stop
+                            Write-Host "User $guestLaUid added to Administrators group."
+                        }
+                        else {
+                            Write-Host "User $guestLaUid is already an administrator."
+                        }
+                    }
+                    else {
+                        Write-Host "GuestLaPw file is empty. Skipping local account configuration."
+                    }
+                }
+                else {
+                    Write-Host "GuestLaPw key does not exist. Skipping local account configuration."
+                }
+            }
+            else {
+                Write-Host "GuestLaUid file is empty. Skipping local account configuration."
+            }
+        }
+        else {
+            Write-Host "GuestLaUid key does not exist. Skipping local account configuration."
+        }
+        #endregion
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
 
         Set-PhaseStatus "last_completed_phase" "phase_one"
         # Proceed to the next step (e.g., checksum validation)
@@ -193,15 +313,53 @@ switch ($status["last_completed_phase"]) {
         Write-Host "Running Phase Two..."
         Set-PhaseStatus "last_started_phase" "phase_two"
 
-        # domain join goes here
+        # Check if the "GuestDomainJoinTarget" key exists
+        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinTarget.txt"
+        if (Test-Path $guestDomainJoinTargetPath) {
+            $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
+            if ($guestDomainJoinTarget) {
+            # Retrieve the domain join credentials
+            $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinUid.txt"
+            $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinPw.txt"
+
+            if (Test-Path $guestDomainJoinUidPath -and Test-Path $guestDomainJoinPwPath) {
+                $guestDomainJoinUid = Get-Content -Path $guestDomainJoinUidPath
+                $guestDomainJoinPw = Get-Content -Path $guestDomainJoinPwPath
+
+                if ($guestDomainJoinUid -and $guestDomainJoinPw) {
+                # Attempt to join the domain
+                try {
+                    Add-Computer -DomainName $guestDomainJoinTarget -Credential (New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, (ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force))) -Force -ErrorAction Stop
+                    Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
+                }
+                catch {
+                    Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
+                }
+                }
+                else {
+                Write-Host "Domain join credentials are incomplete. Skipping domain join."
+                }
+            }
+            else {
+                Write-Host "Domain join credential files are missing. Skipping domain join."
+            }
+            }
+            else {
+            Write-Host "GuestDomainJoinTarget file is empty. Skipping domain join."
+            }
+        }
+        else {
+            Write-Host "GuestDomainJoinTarget key does not exist. Skipping domain join."
+        }
         
         Set-PhaseStatus "last_completed_phase" "phase_two"
         Restart-Computer
     }
     "phase_two" {
-        # Cleanup goes here
-    }
-    "phase_three" {
-        Write-Host "All phases completed."
+        # Disable the scheduled task to prevent this script from running again
+        $TaskName = "ProvisioningService"
+        Write-Host "Disabling scheduled task $TaskName..."
+        Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Write-Host "Scheduled task $TaskName has been disabled."
     }
 }
