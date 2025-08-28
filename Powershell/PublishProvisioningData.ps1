@@ -8,6 +8,7 @@ param (
     [string]$GuestDomainJoinTarget,
     [string]$GuestDomainJoinUid,
     [string]$GuestDomainJoinPw,
+    [string]$GuestDomainJoinOU,
 
     [Parameter(Mandatory = $true)]
     [string]$GuestLaUid,
@@ -27,9 +28,89 @@ if ($GuestV4IpAddr -or $GuestV4CidrPrefix -or $GuestV4DefaultGw -or $GuestV4Dns1
 }
 
 # Validate domain settings if any domain-related parameter is provided
-if ($GuestDomainJoinTarget -or $GuestDomainJoinUid -or $GuestDomainJoinPw) {
-    if (-not $GuestDomainJoinTarget -or -not $GuestDomainJoinUid -or -not $GuestDomainJoinPw) {
-        throw "All domain settings (GuestDomainJoinTarget, GuestDomainJoinUid, GuestDomainJoinPw) must be provided if any domain setting is specified."
+if ($GuestDomainJoinTarget -or $GuestDomainJoinUid -or $GuestDomainJoinPw -or $GuestDomainJoinOU) {
+    if (-not $GuestDomainJoinTarget -or -not $GuestDomainJoinUid -or -not $GuestDomainJoinPw -or -not $GuestDomainJoinOU) {
+        throw "All domain settings (GuestDomainJoinTarget, GuestDomainJoinUid, GuestDomainJoinPw, GuestDomainJoinOU) must be provided if any domain setting is specified."
+    }
+}
+
+function Set-VMKeyValuePair {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$VMName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    # Get the VM management service and target VM
+    $VmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+        Msvm_VirtualSystemManagementService
+    $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+        Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+
+    if (-not $vm) { throw "VM '$VMName' not found." }
+
+    # Enumerate existing host->guest custom KVPs (HostExchangeItems) using your sample approach
+    $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
+    $hostItems = @($kvpSettings.HostExchangeItems)
+
+    if ($hostItems.Count -gt 0) {
+        $toRemove = @()
+
+        foreach ($item in $hostItems) {
+            # Look for an entry whose Name equals $Name
+            $match = ([xml]$item).SelectSingleNode(
+                "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']"
+            )
+            if ($match -ne $null) {
+                # Keep the original XML string to pass to RemoveKvpItems
+                $toRemove += $item
+            }
+        }
+
+        if ($toRemove.Count -gt 0) {
+            $null = $VmMgmt.RemoveKvpItems($vm, $toRemove)
+        }
+    }
+
+    # Create and add the new KVP (Source=0 => host-to-guest)
+    $kvpDataItem = ([WMIClass][String]::Format("\\{0}\{1}:{2}",
+            $VmMgmt.ClassPath.Server,
+            $VmMgmt.ClassPath.NamespacePath,
+            "Msvm_KvpExchangeDataItem")).CreateInstance()
+
+    $kvpDataItem.Name = $Name
+    $kvpDataItem.Data = $Value
+    $kvpDataItem.Source = 0
+
+    $null = $VmMgmt.AddKvpItems($vm, $kvpDataItem.PSBase.GetText(1))
+}
+
+function Get-VMKeyValuePair {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$VMName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+    $VmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+        Msvm_VirtualSystemManagementService
+    $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+        Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+    ($vm.GetRelated("Msvm_KvpExchangeComponent")[0] `
+    ).GetRelated("Msvm_KvpExchangeComponentSettingData").HostExchangeItems | % { `
+            $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
+                "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$name']")
+
+        if ($GuestExchangeItemXml -ne $null) {
+            $GuestExchangeItemXml.SelectSingleNode(`
+                    "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+        }
     }
 }
 
@@ -62,7 +143,8 @@ function Publish-KvpEncryptedValue {
         $encryptedBytes = $encryptor.TransformFinalBlock($valueBytes, 0, $valueBytes.Length)
 
         $encryptedValue = [Convert]::ToBase64String($iv + $encryptedBytes)
-    } catch {
+    }
+    catch {
         throw "Failed to encrypt the value: $_"
     }
 
@@ -70,7 +152,8 @@ function Publish-KvpEncryptedValue {
     try {
         Set-VMKeyValuePair -VMName $VmName -Name $Key -Value $encryptedValue
         Write-Host "Successfully published encrypted value for key '$Key' on VM '$VmName'."
-    } catch {
+    }
+    catch {
         throw "Failed to publish the encrypted value to the KVP: $_"
     }
 }
@@ -102,7 +185,8 @@ try {
             [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
         )
     ).Replace("-", "").ToLower()
-} catch {
+}
+catch {
     throw "Failed to compute the checksum: $_"
 }
 
@@ -110,7 +194,8 @@ try {
 try {
     Set-VMKeyValuePair -VMName $VmName -Name "provisioningsystemchecksum" -Value $checksum
     Write-Host "Successfully published checksum for provisioning data on VM '$VmName'."
-} catch {
+}
+catch {
     throw "Failed to publish the provisioning system checksum: $_"
 }
 
@@ -122,7 +207,8 @@ try {
 try {
     $aesKey = [System.Convert]::ToBase64String((New-Object System.Security.Cryptography.AesManaged).Key)
     Write-Host "Generated new AES key."
-} catch {
+}
+catch {
     throw "Failed to generate AES key: $_"
 }
 
@@ -133,7 +219,8 @@ try {
         throw "Guest provisioning public key is not set in the KVP."
     }
     Write-Host "Retrieved guest provisioning public key from KVP."
-} catch {
+}
+catch {
     throw "Failed to retrieve guest provisioning public key from KVP: $_"
 }
 
@@ -143,7 +230,8 @@ try {
     $rsa.ImportSubjectPublicKeyInfo([Convert]::FromBase64String($guestProvisioningPublicKey), [ref]0)
     $wrappedAesKey = [Convert]::ToBase64String($rsa.Encrypt([Convert]::FromBase64String($aesKey), [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1))
     Write-Host "Wrapped AES key using guest provisioning public key."
-} catch {
+}
+catch {
     throw "Failed to wrap the AES key: $_"
 }
 
@@ -151,7 +239,8 @@ try {
 try {
     Set-VMKeyValuePair -VMName $VmName -Name "sharedaeskey" -Value $wrappedAesKey
     Write-Host "Successfully published wrapped AES key to KVP as 'sharedaeskey'."
-} catch {
+}
+catch {
     throw "Failed to publish the wrapped AES key to the KVP: $_"
 }
 
@@ -165,7 +254,8 @@ foreach ($paramName in $PSBoundParameters.Keys) {
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         try {
             Publish-KvpEncryptedValue -VmName $VmName -Key $paramName -Value $paramValue -AesKey $aesKey
-        } catch {
+        }
+        catch {
             Write-Host "Failed to publish encrypted value for parameter '$paramName': $_"
         }
     }
@@ -175,6 +265,7 @@ foreach ($paramName in $PSBoundParameters.Keys) {
 try {
     Set-VMKeyValuePair -VMName $VmName -Name "hostprovisioningsystemstate" -Value "provisioningdatapublished"
     Write-Host "Provisioning system state 'provisioningdatapublished'."
-} catch {
+}
+catch {
     throw "Failed to set the host provisioning system state: $_"
 }
