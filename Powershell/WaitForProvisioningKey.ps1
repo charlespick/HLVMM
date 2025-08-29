@@ -81,7 +81,7 @@ function Get-VMKeyValuePair {
 
 # Set the KVP HostProvisioningSystemState to "Waitingforpublickey"
 Set-VMKeyValuePair -VMName $VMName -Name "HostProvisioningSystemState" -Value "Waitingforpublickey"
-Set-VMKeyValuePair -VMName $VMName -Name "ProvisioningSystemManifest " -Value "Provisioningsystemver1"
+Set-VMKeyValuePair -VMName $VMName -Name "ProvisioningSystemManifest" -Value "Provisioningsystemver1"
 
 # Initialize timeout variables
 $timeout = 600 # 10 minutes in seconds

@@ -79,14 +79,14 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "HostProvisioningSystemState" -ErrorAction SilentlyContinue
             if ($state -eq "waitingforpublickey") {
                 break
             }
             Start-Sleep -Seconds 5
         }
 
-        $manifest = Read-HyperVKvp -Key "provisioningsystemmanifest" -ErrorAction SilentlyContinue
+        $manifest = Read-HyperVKvp -Key "ProvisioningSystemManifest" -ErrorAction SilentlyContinue
         if ($manifest -ne "provisioningsystemver1") {
             Write-Host "Provisioning system manifest mismatch. Terminating program."
             exit
@@ -98,12 +98,12 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         # Convert public key to Base64 and write it to the KVP
         $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
-        Write-HyperVKvp -Key "guestprovisioningpublickey" -Value $publicKeyBase64
+        Write-HyperVKvp -Key "GuestProvisioningPublicKey" -Value $publicKeyBase64
 
-        Write-HyperVKvp -Key "guestprovisioningstate" -Value "waitingforaeskey"
+        Write-HyperVKvp -Key "GuestProvisioningState" -Value "waitingforaeskey"
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "HostProvisioningSystemState" -ErrorAction SilentlyContinue
             if ($state -eq "provisioningdatapublished") {
                 break
             }
@@ -111,7 +111,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         # Read the shared AES key from "sharedaeskey"
-        $sharedAesKeyBase64 = Read-HyperVKvp -Key "sharedaeskey" -ErrorAction SilentlyContinue
+        $sharedAesKeyBase64 = Read-HyperVKvp -Key "SharedAesKey" -ErrorAction SilentlyContinue
         if (-not $sharedAesKeyBase64) {
             Write-Host "Failed to retrieve shared AES key. Terminating program."
             exit
