@@ -17,17 +17,7 @@ function Write-HyperVKvp {
     Set-ItemProperty -Path $regPath -Name $Key -Value $Value -Type String
 }
 
-function Get-PhaseStatus {
-    $status = Get-Content $PhaseFile | ConvertFrom-StringData
-    return $status
-}
-
-function Set-PhaseStatus {
-    param($Key, $Value)
-    $status = Get-Content $PhaseFile | ConvertFrom-StringData
-    $status[$Key] = $Value
-    $status.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } | Set-Content $PhaseFile
-}
+$PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
 
 function Decrypt-AesCbcWithPrependedIV {
     [CmdletBinding()]
@@ -78,21 +68,15 @@ function Decrypt-AesCbcWithPrependedIV {
     }
 }
 
-$PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
-$PhaseDir = [System.IO.Path]::GetDirectoryName($PhaseFile)
-
-if (-not (Test-Path $PhaseDir)) {
-    New-Item -ItemType Directory -Path $PhaseDir -Force | Out-Null
-}
-
 if (-not (Test-Path $PhaseFile)) {
-    Set-Content $PhaseFile "last_started_phase=nophasestartedyet`nlast_completed_phase=nophasestartedyet"
+    "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
 }
 
-$status = Get-PhaseStatus
-switch ($status.last_completed_phase) {
+Start-Sleep -Milliseconds 200
+
+switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
     "nophasestartedyet" {
-        Set-PhaseStatus "last_started_phase" "phase_one"
+        "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
 
         while ($true) {
             $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
@@ -289,28 +273,10 @@ switch ($status.last_completed_phase) {
         }
         #endregion
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
-
-        Set-PhaseStatus "last_completed_phase" "phase_one"
-        # Proceed to the next step (e.g., checksum validation)
         Restart-Computer
     }
     "phase_one" {
-        Write-Host "Running Phase Two..."
-        Set-PhaseStatus "last_started_phase" "phase_two"
+        "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
         # Check if the "GuestDomainJoinTarget" key exists
         $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinTarget.txt"
