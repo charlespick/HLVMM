@@ -35,7 +35,7 @@
                 <RunSynchronousCommand wcm:action="add">
                     <Order>5</Order>
                     <Description>Add call to ProvisioningBootstrapper.ps1 in SetupComplete.cmd</Description>
-                    <Path>cmd /C echo for /f %%%%i in ('wmic logicaldisk where "DriveType=5" get DeviceID ^| find ":"') do powershell.exe -ExecutionPolicy Bypass -File "%%%%i\ProvisioningBootstrapper.ps1" >> %WINDIR%\Setup\Scripts\SetupComplete.cmd</Path>
+                    <Path>cmd /c echo for /f %%i in ('powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk ^| Where-Object { $_.DriveType -eq 5 } ^| Select-Object -ExpandProperty DeviceID"') do powershell.exe -ExecutionPolicy Bypass -File "%%i\ProvisioningBootstrapper.ps1" &gt; C:\Windows\Setup\Scripts\SetupComplete.cmd</Path>
                     <WillReboot>OnRequest</WillReboot>
                 </RunSynchronousCommand>
             </RunSynchronous>
