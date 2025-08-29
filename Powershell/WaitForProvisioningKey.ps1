@@ -80,22 +80,22 @@ function Get-VMKeyValuePair {
 
 
 # Set the KVP HostProvisioningSystemState to "Waitingforpublickey"
-Set-VMKeyValuePair -VMName $VMName -Name "HostProvisioningSystemState" -Value "Waitingforpublickey"
-Set-VMKeyValuePair -VMName $VMName -Name "ProvisioningSystemManifest" -Value "Provisioningsystemver1"
+Set-VMKeyValuePair -VMName $VMName -Name "hostprovisioningsystemstate" -Value "waitingforpublickey"
+Set-VMKeyValuePair -VMName $VMName -Name "provisioningsystemmanifest" -Value "provisioningsystemver1"
 
 # Initialize timeout variables
 $timeout = 600 # 10 minutes in seconds
 $interval = 5  # Check every 5 seconds
 $elapsedTime = 0
 
-Write-Host "Waiting for GuestProvisioningSystemState to equal 'Waitingforaeskey'..."
+Write-Host "Waiting for guestprovisioningsystemstate to equal 'waitingforaeskey'..."
 
 while ($elapsedTime -lt $timeout) {
     # Get the current GuestProvisioningSystemState
-    $guestState = Get-VMKeyValuePair -VMName $VMName -Name "GuestProvisioningSystemState"
+    $guestState = Get-VMKeyValuePair -VMName $VMName -Name "guestprovisioningsystemstate"
 
-    if ($guestState -eq "Waitingforaeskey") {
-        Write-Host "GuestProvisioningSystemState is 'Waitingforaeskey'. Exiting successfully."
+    if ($guestState -eq "waitingforaeskey") {
+        Write-Host "guestprovisioningsystemstate is 'waitingforaeskey'. Exiting successfully."
         exit 0
     }
 
@@ -105,5 +105,5 @@ while ($elapsedTime -lt $timeout) {
 }
 
 # Timeout reached
-Write-Error "Timeout reached. GuestProvisioningSystemState did not become 'Waitingforaeskey'."
+Write-Error "Timeout reached. guestprovisioningsystemstate did not become 'waitingforaeskey'."
 exit 1

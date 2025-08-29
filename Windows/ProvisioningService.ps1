@@ -79,14 +79,14 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "HostProvisioningSystemState" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
             if ($state -eq "waitingforpublickey") {
                 break
             }
             Start-Sleep -Seconds 5
         }
 
-        $manifest = Read-HyperVKvp -Key "ProvisioningSystemManifest" -ErrorAction SilentlyContinue
+        $manifest = Read-HyperVKvp -Key "provisioningsystemmanifest" -ErrorAction SilentlyContinue
         if ($manifest -ne "provisioningsystemver1") {
             Write-Host "Provisioning system manifest mismatch. Terminating program."
             exit
@@ -98,12 +98,12 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         # Convert public key to Base64 and write it to the KVP
         $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
-        Write-HyperVKvp -Key "GuestProvisioningPublicKey" -Value $publicKeyBase64
+        Write-HyperVKvp -Key "guestprovisioningpublickey" -Value $publicKeyBase64
 
-        Write-HyperVKvp -Key "GuestProvisioningState" -Value "waitingforaeskey"
+        Write-HyperVKvp -Key "guestprovisioningsystemstate" -Value "waitingforaeskey"
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "HostProvisioningSystemState" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
             if ($state -eq "provisioningdatapublished") {
                 break
             }
@@ -111,7 +111,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         # Read the shared AES key from "sharedaeskey"
-        $sharedAesKeyBase64 = Read-HyperVKvp -Key "SharedAesKey" -ErrorAction SilentlyContinue
+        $sharedAesKeyBase64 = Read-HyperVKvp -Key "sharedaeskey" -ErrorAction SilentlyContinue
         if (-not $sharedAesKeyBase64) {
             Write-Host "Failed to retrieve shared AES key. Terminating program."
             exit
@@ -122,18 +122,18 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         # Define the keys to decrypt
         $keysToDecrypt = @(
-            "GuestHostName",
-            "GuestV4IpAddr",
-            "GuestV4CidrPrefix",
-            "GuestV4DefaultGw",
-            "GuestV4Dns1",
-            "GuestV4Dns2",
-            "GuestNetDnsSuffix",
-            "GuestDomainJoinTarget",
-            "GuestDomainJoinUid",
-            "GuestDomainJoinPw",
-            "GuestLaUid",
-            "GuestLaPw"
+            "guesthostname",
+            "guestv4ipaddr",
+            "guestv4cdirprefix",
+            "guestv4defaultgw",
+            "guestv4dns1",
+            "guestv4dns2",
+            "guestnetdnssuffix",
+            "guestdomainjointarget",
+            "guestdomainjoinuid",
+            "guestdomainjoinpw",
+            "guestlauid",
+            "guestlapw"
         )
 
         # Decrypt and process each key

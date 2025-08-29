@@ -287,7 +287,7 @@ foreach ($paramName in $PSBoundParameters.Keys) {
     # Skip publishing if the parameter value is null or empty
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         try {
-            Publish-KvpEncryptedValue -VmName $GuestHostName -Key $paramName -Value $paramValue -AesKey $aesKey
+            Publish-KvpEncryptedValue -VmName $GuestHostName -Key $paramName.ToLower() -Value $paramValue -AesKey $aesKey
         }
         catch {
             Write-Host "Failed to publish encrypted value for parameter '$paramName': $_"
