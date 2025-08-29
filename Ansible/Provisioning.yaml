@@ -24,7 +24,7 @@
         -GBRam {{ gb_ram }}
         -CPUcores {{ cpu_cores }}
         -VMDataFolder "{{ copyimage_result.stdout | trim }}"
-        {% if vlan_id is defined and vlan_id|length > 0 %}-VLANId {{ vlan_id }}{% endif %}
+        {% if vlan_id is defined and vlan_id > 0 %}-VLANId {{ vlan_id }}{% endif %}
 
     - name: Wait For Provisioning to Start
       ansible.windows.win_command: >
@@ -38,7 +38,7 @@
         -GuestLaUid {{ guest_la_uid }}
         -GuestLaPw {{ guest_la_pw }}
         {% if guest_v4_ipaddr is defined and guest_v4_ipaddr|length > 0 %}-GuestV4IpAddr {{ guest_v4_ipaddr }}{% endif %}
-        {% if guest_v4_cidrprefix is defined and guest_v4_cidrprefix|length > 0 %}-GuestV4CidrPrefix {{ guest_v4_cidrprefix }}{% endif %}
+        {% if guest_v4_cidrprefix is defined and guest_v4_cidrprefix > 0 %}-GuestV4CidrPrefix {{ guest_v4_cidrprefix }}{% endif %}
         {% if guest_v4_defaultgw is defined and guest_v4_defaultgw|length > 0 %}-GuestV4DefaultGw {{ guest_v4_defaultgw }}{% endif %}
         {% if guest_v4_dns1 is defined and guest_v4_dns1|length > 0 %}-GuestV4Dns1 {{ guest_v4_dns1 }}{% endif %}
         {% if guest_v4_dns2 is defined and guest_v4_dns2|length > 0 %}-GuestV4Dns2 {{ guest_v4_dns2 }}{% endif %}
