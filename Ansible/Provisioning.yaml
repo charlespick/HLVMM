@@ -34,7 +34,7 @@
     - name: Run PublishProvisioningData.ps1
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\PublishProvisioningData.ps1"
-        -VmName {{ vm_name }}
+        -GuestHostName {{ vm_name }}
         -GuestLaUid {{ guest_la_uid }}
         -GuestLaPw {{ guest_la_pw }}
         {% if guest_v4_ipaddr is defined and guest_v4_ipaddr|length > 0 %}-GuestV4IpAddr {{ guest_v4_ipaddr }}{% endif %}
