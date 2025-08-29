@@ -4,20 +4,20 @@
   gather_facts: no
 
   tasks:
-    - name: Run CopyImage.ps1
+    - name: Copy Image
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\CopyImage.ps1"
         -VMName "{{ vm_name }}"
         -ImageName "{{ image_name }}"
       register: copyimage_result
 
-    - name: Run CopyProvisioningISO.ps1
+    - name: Copy Provisioning ISO
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\CopyProvisioningISO.ps1"
         -OSFamily {{ os_family }}
         -VMDataFolder "{{ copyimage_result.stdout | trim }}"
 
-    - name: Run RegisterVM.ps1
+    - name: Register VM
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\RegisterVM.ps1"
         -OSFamily "{{ os_family }}"
@@ -26,12 +26,12 @@
         -VMDataFolder "{{ copyimage_result.stdout | trim }}"
         {% if vlan_id is defined and vlan_id|length > 0 %}-VLANId {{ vlan_id }}{% endif %}
 
-    - name: Run WaitForProvisioningKey.ps1
+    - name: Wait For Provisioning to Start
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\WaitForProvisioningKey.ps1"
         -VMName {{ vm_name }}
 
-    - name: Run PublishProvisioningData.ps1
+    - name: Publish Provisioning Data
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\PublishProvisioningData.ps1"
         -GuestHostName {{ vm_name }}

@@ -273,7 +273,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
         #endregion
 
-        Restart-Computer
+        Restart-Computer -Force
     }
     "phase_one" {
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
@@ -296,6 +296,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                         try {
                             Add-Computer -DomainName $guestDomainJoinTarget -Credential (New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, (ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force))) -Force -ErrorAction Stop
                             Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
+                            Set-PhaseStatus "last_completed_phase" "phase_two"
+                            Restart-Computer -Force
                         }
                         catch {
                             Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
@@ -315,10 +317,12 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
         else {
             Write-Host "GuestDomainJoinTarget key does not exist. Skipping domain join."
+            Set-PhaseStatus "last_completed_phase" "phase_two"
+            $TaskName = "ProvisioningService"
+            Write-Host "Disabling scheduled task $TaskName..."
+            Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+            Write-Host "Scheduled task $TaskName has been disabled."
         }
-        
-        Set-PhaseStatus "last_completed_phase" "phase_two"
-        Restart-Computer
     }
     "phase_two" {
         # Disable the scheduled task to prevent this script from running again
