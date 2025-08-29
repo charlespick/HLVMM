@@ -1,25 +1,14 @@
 # Define variables
-$CDROMPath   = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$TargetPath  = "C:\ProgramData\HyperV"
-$ScriptName  = "ProvisioningService.ps1"
+$TargetPath = Join-Path $env:SystemRoot "Setup\Scripts\ProvisioningService.ps1"
 $TaskName    = "ProvisioningService"
 
-# Ensure target path exists
-if (-not (Test-Path $TargetPath)) {
-    New-Item -ItemType Directory -Path $TargetPath -Force | Out-Null
-}
-
-# Copy script
-Write-Host "Copying $ScriptName to $TargetPath..."
-Copy-Item -Path "$CDROMPath\$ScriptName" -Destination "$TargetPath\$ScriptName" -Force
-
 # Make sure script is unblocked (not from Internet zone)
-Unblock-File -Path "$TargetPath\$ScriptName"
+Unblock-File -Path $TargetPath
 
 # Register scheduled task definition
 Write-Host "Creating scheduled task $TaskName..."
 
-$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$TargetPath\$ScriptName`""
+$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File $TargetPath"
 $Trigger = New-ScheduledTaskTrigger -AtStartup
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
