@@ -1,3 +1,5 @@
+Start-Transcript -Path "C:\ProgramData\HyperV\ProvisioningService.log" -Append
+
 function Read-HyperVKvp {
     param(
         [Parameter(Mandatory = $true)][string]$Key
@@ -248,7 +250,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
                         # Ensure the user is an administrator
                         $adminGroup = Get-LocalGroup -Name "Administrators"
-                        if (-not ($adminGroup | Get-LocalGroupMember | Where-Object { $_.Name -eq $guestLaUid })) {
+                        if (-not ($adminGroup | Get-LocalGroupMember | Where-Object { $_.Name -like "*$guestLaUid" })) {
                             Add-LocalGroupMember -Group "Administrators" -Member $guestLaUid -ErrorAction Stop
                             Write-Host "User $guestLaUid added to Administrators group."
                         }
@@ -297,6 +299,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                             Add-Computer -DomainName $guestDomainJoinTarget -Credential (New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, (ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force))) -Force -ErrorAction Stop
                             Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
                             Set-PhaseStatus "last_completed_phase" "phase_two"
+                            $TaskName = "ProvisioningService"
+                            Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
                             Restart-Computer -Force
                         }
                         catch {
@@ -323,12 +327,5 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
             Write-Host "Scheduled task $TaskName has been disabled."
         }
-    }
-    "phase_two" {
-        # Disable the scheduled task to prevent this script from running again
-        $TaskName = "ProvisioningService"
-        Write-Host "Disabling scheduled task $TaskName..."
-        Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        Write-Host "Scheduled task $TaskName has been disabled."
     }
 }
