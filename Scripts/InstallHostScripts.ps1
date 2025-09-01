@@ -24,7 +24,8 @@ function Compare-Version {
 # Get local version
 if (Test-Path $localVersionFile) {
     $localVersion = Get-Content -Path $localVersionFile -Raw
-} else {
+}
+else {
     $localVersion = "0.0.0"
 }
 
@@ -60,6 +61,7 @@ if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
     Set-Content -Path $localVersionFile -Value $versionContent -Force
 
     Write-Host "Update complete."
-} else {
+}
+else {
     Write-Host "No update needed. Local version is up-to-date."
 }

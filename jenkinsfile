@@ -43,6 +43,9 @@ pipeline {
 
                             aws s3 cp "$isoDir\\WindowsProvisioning.iso" $dest
                             aws s3 cp "$isoDir\\LinuxProvisioning.iso" $dest
+                            # Upload version file to bucket root
+                            $versionFile = Join-Path $env:WORKSPACE "version"
+                            aws s3 cp $versionFile $dest
                         '''
                     }
                 }
