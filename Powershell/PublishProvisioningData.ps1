@@ -7,18 +7,22 @@ param (
     [string]$GuestNetDnsSuffix,
     [string]$GuestDomainJoinTarget,
     [string]$GuestDomainJoinUid,
-    [string]$GuestDomainJoinPw,
     [string]$GuestDomainJoinOU,
 
     [Parameter(Mandatory = $true)]
     [string]$GuestLaUid,
 
     [Parameter(Mandatory = $true)]
-    [string]$GuestLaPw,
-
-    [Parameter(Mandatory = $true)]
     [string]$GuestHostName
 )
+
+# Read secure values from env instead of params
+$GuestLaPw = $env:GuestLaPw
+if (-not $GuestLaPw) {
+    Write-Error "GuestLaPw is mandatory and must be set in the environment variable 'GuestLaPw'."
+    exit 1
+}
+$GuestDomainJoinPw = $env:GuestDomainJoinPw
 
 # Validate IP settings if any IP-related parameter is provided
 if ($GuestV4IpAddr -or $GuestV4CidrPrefix -or $GuestV4DefaultGw -or $GuestV4Dns1 -or $GuestV4Dns2 -or $GuestNetDnsSuffix) {

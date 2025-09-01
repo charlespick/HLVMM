@@ -76,6 +76,8 @@ if (-not (Test-Path $PhaseFile)) {
 
 Start-Sleep -Milliseconds 200
 
+$decryptedKeysDir = "C:\ProgramData\HyperV"
+
 switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
     "nophasestartedyet" {
         "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
@@ -164,8 +166,6 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$key.txt")
             [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
         }
-
-        $decryptedKeysDir = "C:\ProgramData\HyperV"
 
         $concatenatedData = ($keysToDecrypt | ForEach-Object {
                 $filePath = Join-Path -Path $decryptedKeysDir -ChildPath "$_.txt"
