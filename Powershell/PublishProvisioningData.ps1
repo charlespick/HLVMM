@@ -286,8 +286,26 @@ catch {
 #endregion
 
 # Publish each defined parameter to the KVP as an encrypted value
-foreach ($paramName in $PSBoundParameters.Keys) {
-    $paramValue = $PSBoundParameters[$paramName]
+
+# Build array of keys to publish
+$keysToPublish = @($PSBoundParameters.Keys)
+
+$keysToPublish += "GuestLaPw"
+
+if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
+    $keysToPublish += "GuestDomainJoinPw"
+}
+
+foreach ($paramName in $keysToPublish) {
+    if ($paramName -eq "GuestLaPw") {
+        $paramValue = $GuestLaPw
+    }
+    elseif ($paramName -eq "GuestDomainJoinPw") {
+        $paramValue = $GuestDomainJoinPw
+    }
+    else {
+        $paramValue = $PSBoundParameters[$paramName]
+    }
 
     # Skip publishing if the parameter value is null or empty
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
