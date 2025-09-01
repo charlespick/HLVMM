@@ -47,8 +47,21 @@
         {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
         {% if guest_domain_joinpw is defined and guest_domain_joinpw|length > 0 %}-GuestDomainJoinPw {{ guest_domain_joinpw }}{% endif %}
 
-    - name: Add VM to Cluster
-      ansible.windows.win_command: >
-        powershell.exe -ExecutionPolicy Bypass -Command "Add-ClusterVirtualMachineRole -VMName '{{ vm_name }}'"
+    - block:
+        - name: Enable CredSSP server role
+          ansible.windows.win_shell: >
+            powershell.exe -ExecutionPolicy Bypass -Command
+            "Enable-WSManCredSSP -Role Server -Force"
+
+        - name: Add VM to Cluster (using CredSSP)
+          ansible.windows.win_command: >
+            powershell.exe -ExecutionPolicy Bypass -Command
+            "Add-ClusterVirtualMachineRole -VMName '{{ vm_name }}'"
+          vars:
+            ansible_winrm_transport: credssp
+
+        - name: Disable CredSSP server role
+          ansible.windows.win_shell: >
+            powershell.exe -ExecutionPolicy Bypass -Command
+            "Disable-WSManCredSSP -Role Server"
       when: vm_clustered is defined and vm_clustered == "Yes"
-        
