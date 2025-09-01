@@ -8,14 +8,7 @@ param (
 )
 
 # Define static paths for provisioning ISOs
-$StaticCDPath = Get-ChildItem -Path "C:\ClusterStorage" -Directory |
-    ForEach-Object {
-        $diskImagesPath = Join-Path $_.FullName "ProvisioningISOs"
-        if (Test-Path $diskImagesPath) {
-            return $diskImagesPath
-        }
-    } |
-    Select-Object -First 1
+$StaticCDPath = "C:\Program Files\Home Lab Virtual Machine Manager"
 
 $LinuxISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
 $WindowsISOPath = Join-Path -Path $StaticCDPath -ChildPath "WindowsProvisioning.iso"
