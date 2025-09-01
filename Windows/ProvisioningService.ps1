@@ -79,6 +79,20 @@ Start-Sleep -Milliseconds 200
 switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
     "nophasestartedyet" {
         "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
+        $cdromDrives = Get-WmiObject -Class Win32_CDROMDrive
+
+        if ($cdromDrives) {
+            foreach ($cd in $cdromDrives) {
+                $driveLetter = $cd.Drive
+                if ($driveLetter) {
+                    (New-Object -comObject Shell.Application).NameSpace(17).ParseName($driveLetter).InvokeVerb("Eject")
+                    Write-Host "Ejected CD-ROM at drive $driveLetter"
+                }
+            }
+        }
+        else {
+            Write-Host "No CD-ROM drive found to eject."
+        }
 
         while ($true) {
             $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
