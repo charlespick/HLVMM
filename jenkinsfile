@@ -11,8 +11,6 @@ pipeline {
 
     environment {
         AWS_CREDS = credentials('jenkins-vmm-isos-upload')
-        AWS_ACCESS_KEY_ID     = "${env.AWS_CREDS_USR}"
-        AWS_SECRET_ACCESS_KEY = "${env.AWS_CREDS_PSW}"
     }
 
     stages {
@@ -34,15 +32,19 @@ pipeline {
 
         stage('Upload to S3') {
             steps {
-                withEnv(["PATH+AWSCLI=C:\\Program Files\\Amazon\\AWSCLIV2"]) {
-                    powershell '''
-                        $isoDir = Join-Path $env:WORKSPACE "ISOs"
+                withCredentials([usernamePassword(credentialsId: 'jenkins-vmm-isos-upload',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withEnv(['PATH+AWSCLI=C:\\Program Files\\Amazon\\AWSCLIV2']) {
+                        powershell '''
+                            $isoDir = Join-Path $env:WORKSPACE "ISOs"
 
-                        $dest = "s3://$env:S3_BUCKET/$env:S3_PREFIX/"
+                            $dest = "s3://$env:S3_BUCKET/$env:S3_PREFIX/"
 
-                        aws s3 cp "$isoDir\\WindowsProvisioning.iso" $dest
-                        aws s3 cp "$isoDir\\LinuxProvisioning.iso" $dest
-                    '''
+                            aws s3 cp "$isoDir\\WindowsProvisioning.iso" $dest
+                            aws s3 cp "$isoDir\\LinuxProvisioning.iso" $dest
+                        '''
+                    }
                 }
             }
         }
