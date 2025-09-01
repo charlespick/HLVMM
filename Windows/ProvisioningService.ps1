@@ -148,6 +148,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             "guestdomainjointarget",
             "guestdomainjoinuid",
             "guestdomainjoinpw",
+            "guestdomainjoinou",
             "guestlauid",
             "guestlapw"
         )
@@ -302,19 +303,32 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 # Retrieve the domain join credentials
                 $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinUid.txt"
                 $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinPw.txt"
+                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinOU.txt"
 
-                if (Test-Path $guestDomainJoinUidPath -and Test-Path $guestDomainJoinPwPath) {
+                if (Test-Path $guestDomainJoinUidPath -and Test-Path $guestDomainJoinPwPath -and Test-Path $guestDomainJoinOUPath) {
                     $guestDomainJoinUid = Get-Content -Path $guestDomainJoinUidPath
                     $guestDomainJoinPw = Get-Content -Path $guestDomainJoinPwPath
+                    $guestDomainJoinOU = Get-Content -Path $guestDomainJoinOUPath
 
-                    if ($guestDomainJoinUid -and $guestDomainJoinPw) {
+                    if ($guestDomainJoinUid -and $guestDomainJoinPw -and $guestDomainJoinOU) {
                         # Attempt to join the domain
                         try {
-                            Add-Computer -DomainName $guestDomainJoinTarget -Credential (New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, (ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force))) -Force -ErrorAction Stop
+                            $securePw = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
+                            $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $securePw)
+
+                            Add-Computer `
+                                -DomainName $guestDomainJoinTarget `
+                                -OUPath $guestDomainJoinOU `
+                                -Credential $credential `
+                                -Force `
+                                -ErrorAction Stop
+
                             Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
                             Set-PhaseStatus "last_completed_phase" "phase_two"
+
                             $TaskName = "ProvisioningService"
                             Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+
                             Restart-Computer -Force
                         }
                         catch {

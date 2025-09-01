@@ -145,6 +145,7 @@ phase_one() {
         "guestdomainjointarget"
         "guestdomainjoinuid"
         "guestdomainjoinpw"
+        "guestdomainjoinou"
         "Guestlauid"
         "guestlapw"
     )

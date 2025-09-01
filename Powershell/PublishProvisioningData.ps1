@@ -208,6 +208,7 @@ $provisioningData = @(
     $GuestDomainJoinTarget,
     $GuestDomainJoinUid,
     $GuestDomainJoinPw,
+    $GuestDomainJoinOU
     $GuestLaUid,
     $GuestLaPw
 ) -join "|"

@@ -46,6 +46,7 @@
         {% if guest_domain_jointarget is defined and guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ guest_domain_jointarget }}{% endif %}
         {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
         {% if guest_domain_joinpw is defined and guest_domain_joinpw|length > 0 %}-GuestDomainJoinPw {{ guest_domain_joinpw }}{% endif %}
+        {% if guest_domain_joinou is defined and guest_domain_joinou|length > 0 %}-GuestDomainJoinOU {{ guest_domain_joinou }}{% endif %}
 
     - block:
         - name: Enable CredSSP server role
