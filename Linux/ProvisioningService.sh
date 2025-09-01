@@ -137,7 +137,7 @@ phase_one() {
     keys_to_decrypt=(
         "guesthostname"
         "Guestv4ipaddr"
-        "Guestv4cdirprefix"
+        "guestv4cidrprefix"
         "Guestv4defaultgw"
         "Guestv4dns1"
         "Guestv4dns2"
@@ -172,7 +172,7 @@ phase_one() {
     concatenated_data=$(printf "%s|" \
         "$(cat "$decrypted_keys_dir/guesthostname")" \
         "$(cat "$decrypted_keys_dir/Guestv4ipaddr")" \
-        "$(cat "$decrypted_keys_dir/Guestv4cdirprefix")" \
+        "$(cat "$decrypted_keys_dir/guestv4cidrprefix")" \
         "$(cat "$decrypted_keys_dir/Guestv4defaultgw")" \
         "$(cat "$decrypted_keys_dir/Guestv4dns1")" \
         "$(cat "$decrypted_keys_dir/Guestv4dns2")" \

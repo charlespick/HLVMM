@@ -126,7 +126,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $keysToDecrypt = @(
             "guesthostname",
             "guestv4ipaddr",
-            "guestv4cdirprefix",
+            "guestv4cidrprefix",
             "guestv4defaultgw",
             "guestv4dns1",
             "guestv4dns2",
