@@ -306,9 +306,9 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinOU.txt"
 
                 if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
-                    $guestDomainJoinUid = Get-Content -Path $guestDomainJoinUidPath
-                    $guestDomainJoinPw = Get-Content -Path $guestDomainJoinPwPath
-                    $guestDomainJoinOU = Get-Content -Path $guestDomainJoinOUPath
+                    $guestDomainJoinUid = (Get-Content -Path $guestDomainJoinUidPath).Trim()
+                    $guestDomainJoinPw = (Get-Content -Path $guestDomainJoinPwPath).Trim()
+                    $guestDomainJoinOU = (Get-Content -Path $guestDomainJoinOUPath).Trim()
 
                     if ($guestDomainJoinUid -and $guestDomainJoinPw -and $guestDomainJoinOU) {
                         # Attempt to join the domain
@@ -316,19 +316,34 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                             $securePw = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
                             $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $securePw)
 
-                            Add-Computer `
-                                -DomainName $guestDomainJoinTarget `
-                                -OUPath $guestDomainJoinOU `
-                                -Credential $credential `
-                                -Force `
-                                -ErrorAction Stop
+                            # Wait until the domain controller is reachable via ping
+                            $maxAttempts = 60
+                            $attempt = 0
+                            while ($attempt -lt $maxAttempts) {
+                                if (Test-Connection -ComputerName $guestDomainJoinTarget -Count 1 -Quiet) {
+                                    Write-Host "Domain controller $guestDomainJoinTarget is reachable."
+                                    break
+                                }
+                                else {
+                                    Write-Host "Waiting for domain controller $guestDomainJoinTarget to become reachable..."
+                                    Start-Sleep -Seconds 5
+                                    $attempt++
+                                }
+                            }
+                            if ($attempt -eq $maxAttempts) {
+                                Write-Host "Domain controller $guestDomainJoinTarget is not reachable after $($maxAttempts * 5) seconds. Skipping domain join."
+                                return
+                            }
+
+                            netdom join $env:COMPUTERNAME /domain:$guestDomainJoinTarget /OU:$guestDomainJoinOU /userd:$guestDomainJoinUid /passwordd:$guestDomainJoinPw
 
                             Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
-                            Set-PhaseStatus "last_completed_phase" "phase_two"
+                            "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
                             $TaskName = "ProvisioningService"
                             Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-
+                            
+                            Get-ChildItem -Path $decryptedKeysDir -Filter "guest*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
                             Restart-Computer -Force
                         }
                         catch {
@@ -349,11 +364,13 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
         else {
             Write-Host "GuestDomainJoinTarget key does not exist. Skipping domain join."
-            Set-PhaseStatus "last_completed_phase" "phase_two"
+            "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
             $TaskName = "ProvisioningService"
             Write-Host "Disabling scheduled task $TaskName..."
             Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
             Write-Host "Scheduled task $TaskName has been disabled."
+
+            Get-ChildItem -Path $decryptedKeysDir -Filter "guest*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
         }
     }
 }
