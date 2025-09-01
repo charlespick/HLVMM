@@ -1,5 +1,5 @@
 # Define variables
-$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager\version"
+$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager\scriptsversion"
 $repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/version"
 $repoPowershellApiUrl = "https://api.github.com/repos/charlespick/HLVMM/contents/Powershell"
 $installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager"
@@ -40,7 +40,7 @@ if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
     $powershellFiles = Invoke-RestMethod -Uri $repoPowershellApiUrl -Method Get -UseBasicParsing
 
     # Delete all files in the install directory
-    Get-ChildItem -Path $installDirectory -Recurse | Remove-Item -Force -Recurse
+    Get-ChildItem -Path $installDirectory -Filter *.ps1 -Recurse | Remove-Item -Force
 
     # Ensure install directory exists
     if (-not (Test-Path $installDirectory)) {
