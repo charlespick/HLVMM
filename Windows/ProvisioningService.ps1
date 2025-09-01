@@ -305,7 +305,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinPw.txt"
                 $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinOU.txt"
 
-                if (Test-Path $guestDomainJoinUidPath -and Test-Path $guestDomainJoinPwPath -and Test-Path $guestDomainJoinOUPath) {
+                if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
                     $guestDomainJoinUid = Get-Content -Path $guestDomainJoinUidPath
                     $guestDomainJoinPw = Get-Content -Path $guestDomainJoinPwPath
                     $guestDomainJoinOU = Get-Content -Path $guestDomainJoinOUPath
