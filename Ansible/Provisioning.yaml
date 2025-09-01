@@ -46,4 +46,9 @@
         {% if guest_domain_jointarget is defined and guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ guest_domain_jointarget }}{% endif %}
         {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
         {% if guest_domain_joinpw is defined and guest_domain_joinpw|length > 0 %}-GuestDomainJoinPw {{ guest_domain_joinpw }}{% endif %}
+
+    - name: Add VM to Cluster
+      ansible.windows.win_command: >
+        powershell.exe -ExecutionPolicy Bypass -Command "Add-ClusterVirtualMachineRole -VMName '{{ vm_name }}'"
+      when: vm_clustered is defined and vm_clustered == "Yes"
         
