@@ -1,5 +1,8 @@
 #!/bin/bash
 
+LOGFILE="/tmp/provisioning_service.log"
+exec > >(tee -a "$LOGFILE") 2>&1
+
 # Function to read a key from Hyper-V KVP
 read_hyperv_kvp() {
     local key="$1"
@@ -52,8 +55,7 @@ phase_file="/var/lib/hyperv/service_phase_status"
 
 # Function to initialize the phase file
 initialize_phase_file() {
-    echo "last_started_phase=nophasestartedyet" > "$phase_file"
-    echo "last_completed_phase=nophasestartedyet" >> "$phase_file"
+    echo "nophasestartedyet" > "$phase_file"
 }
 
 # Function to read the current phase status
@@ -67,12 +69,9 @@ read_phase_status() {
 
 # Function to update the phase status
 update_phase_status() {
-    local key="$1"
-    local value="$2"
-    sed -i "s|^$key=.*|$key=$value|" "$phase_file"
+    echo "$1" > "$phase_file"
 }
 
-# Phase one function
 phase_one() {
     echo "Starting phase one..."
     update_phase_status "last_started_phase" "phase_one"
@@ -256,7 +255,6 @@ EOF
     reboot
 }
 
-# Phase two function
 phase_two() {
     echo "Starting phase two..."
     update_phase_status "last_started_phase" "phase_two"
@@ -288,10 +286,7 @@ phase_two() {
     echo "Deleted service and copied script."
 }
 
-# Main execution
 read_phase_status
-
-# Determine which phase to start based on the last completed phase
 case "$last_completed_phase" in
     "nophasestartedyet")
         phase_one

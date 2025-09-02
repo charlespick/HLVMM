@@ -1,0 +1,4 @@
+#cloud-config
+runcmd:
+  - chmod +x /media/cidata/ProvisioningBootstrapper.sh
+  - /media/cidata/ProvisioningBootstrapper.sh
