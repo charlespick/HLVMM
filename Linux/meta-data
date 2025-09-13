@@ -1,1 +1,3 @@
-{}
+# meta-data
+instance-id: generic-vm-001
+local-hostname: generic-vm
