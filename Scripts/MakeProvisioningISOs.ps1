@@ -15,4 +15,4 @@ $winIsoOutputPath = Join-Path -Path $isoOutputFolder -ChildPath "WindowsProvisio
 $linuxFolder = Join-Path -Path $repoRoot -ChildPath "Linux"
 $linuxIsoOutputPath = Join-Path -Path $isoOutputFolder -ChildPath "LinuxProvisioning.iso"
 
-& $oscdimgPath -m -o -lCIDATA -J -R "$linuxFolder" "$linuxIsoOutputPath"
+& $oscdimgPath -m -o -lCIDATA -n -d "$linuxFolder" "$linuxIsoOutputPath"
