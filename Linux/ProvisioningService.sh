@@ -3,6 +3,8 @@
 LOGFILE="/tmp/provisioning_service.log"
 exec > >(tee -a "$LOGFILE") 2>&1
 
+echo "Started Provisioning on [$(hostname)] at [$(date '+%Y-%m-%d %H:%M:%S')] [uptime: $(uptime -p)]"
+
 # Function to read a key from Hyper-V KVP
 read_hyperv_kvp() {
     local key="$1"
