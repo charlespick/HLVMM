@@ -1,3 +1,3 @@
 # meta-data
-instance-id: generic-vm-001
-local-hostname: generic-vm
+instance-id: hlvmm-generic-provisioned-vm
+local-hostname: unspecialized-vm

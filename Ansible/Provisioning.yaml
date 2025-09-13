@@ -1,5 +1,5 @@
 ---
-- name: Provision VM (Windows or Linux)
+- name: Provision VM
   hosts: "{{ hyperv_host }}"
   gather_facts: no
 
