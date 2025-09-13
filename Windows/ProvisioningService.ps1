@@ -189,8 +189,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         #region: Configure hostname 
-        # Check if the "GuestHostName" key exists and set the hostname
-        $guestHostNamePath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestHostName.txt"
+        # Check if the "guesthostname" key exists and set the hostname
+        $guestHostNamePath = Join-Path -Path $decryptedKeysDir -ChildPath "guesthostname.txt"
         if (Test-Path $guestHostNamePath) {
             $guestHostName = Get-Content -Path $guestHostNamePath
             if ($guestHostName) {
@@ -198,25 +198,25 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 Write-Host "Hostname set to: $guestHostName"
             }
             else {
-                Write-Host "GuestHostName file is empty. Skipping hostname configuration."
+                Write-Host "guesthostname file is empty. Skipping hostname configuration."
             }
         }
         else {
-            Write-Host "GuestHostName key does not exist. Skipping hostname configuration."
+            Write-Host "guesthostname key does not exist. Skipping hostname configuration."
         }
         #endregion
         
         #region: Configure network
         # Check if the IP address is defined
-        $guestV4IpAddrPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4IpAddr.txt"
+        $guestV4IpAddrPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestv4ipaddr.txt"
         if (Test-Path $guestV4IpAddrPath) {
             $guestV4IpAddr = Get-Content -Path $guestV4IpAddrPath
             if ($guestV4IpAddr) {
                 # Retrieve other network settings
-                $guestV4CidrPrefix = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4CidrPrefix.txt")
-                $guestV4DefaultGw = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4DefaultGw.txt")
-                $guestV4Dns1 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4Dns1.txt")
-                $guestV4Dns2 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "GuestV4Dns2.txt")
+                $guestV4CidrPrefix = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4cidrprefix.txt")
+                $guestV4DefaultGw = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4defaultgw.txt")
+                $guestV4Dns1 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4dns1.txt")
+                $guestV4Dns2 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4dns2.txt")
 
                 # Configure the network adapter
                 $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
@@ -231,22 +231,22 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 }
             }
             else {
-                Write-Host "GuestV4IpAddr file is empty. Skipping network configuration."
+                Write-Host "guestv4ipaddr file is empty. Skipping network configuration."
             }
         }
         else {
-            Write-Host "GuestV4IpAddr key does not exist. Skipping network configuration."
+            Write-Host "guestv4ipaddr key does not exist. Skipping network configuration."
         }
         #endregion
 
         #region: Configure local account
-        # Check if the "GuestLaUid" key exists
-        $guestLaUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestLaUid.txt"
+        # Check if the "guestlauid" key exists
+        $guestLaUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestlauid.txt"
         if (Test-Path $guestLaUidPath) {
             $guestLaUid = Get-Content -Path $guestLaUidPath
             if ($guestLaUid) {
                 # Retrieve the password for the account
-                $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestLaPw.txt"
+                $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestlapw.txt"
                 if (Test-Path $guestLaPwPath) {
                     $guestLaPw = Get-Content -Path $guestLaPwPath
                     if ($guestLaPw) {
@@ -274,19 +274,19 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                         }
                     }
                     else {
-                        Write-Host "GuestLaPw file is empty. Skipping local account configuration."
+                        Write-Host "guestlapw file is empty. Skipping local account configuration."
                     }
                 }
                 else {
-                    Write-Host "GuestLaPw key does not exist. Skipping local account configuration."
+                    Write-Host "guestlapw key does not exist. Skipping local account configuration."
                 }
             }
             else {
-                Write-Host "GuestLaUid file is empty. Skipping local account configuration."
+                Write-Host "guestlauid file is empty. Skipping local account configuration."
             }
         }
         else {
-            Write-Host "GuestLaUid key does not exist. Skipping local account configuration."
+            Write-Host "guestlauid key does not exist. Skipping local account configuration."
         }
         #endregion
 
@@ -295,15 +295,15 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
     "phase_one" {
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
-        # Check if the "GuestDomainJoinTarget" key exists
-        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinTarget.txt"
+        # Check if the "guestdomainjointarget" key exists
+        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjointarget.txt"
         if (Test-Path $guestDomainJoinTargetPath) {
             $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
             if ($guestDomainJoinTarget) {
                 # Retrieve the domain join credentials
-                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinUid.txt"
-                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinPw.txt"
-                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "GuestDomainJoinOU.txt"
+                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjoinuid.txt"
+                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjoinpw.txt"
+                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjoinou.txt"
 
                 if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
                     $guestDomainJoinUid = (Get-Content -Path $guestDomainJoinUidPath).Trim()
@@ -359,11 +359,11 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 }
             }
             else {
-                Write-Host "GuestDomainJoinTarget file is empty. Skipping domain join."
+                Write-Host "guestdomainjointarget file is empty. Skipping domain join."
             }
         }
         else {
-            Write-Host "GuestDomainJoinTarget key does not exist. Skipping domain join."
+            Write-Host "guestdomainjointarget key does not exist. Skipping domain join."
             "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
             $TaskName = "ProvisioningService"
             Write-Host "Disabling scheduled task $TaskName..."

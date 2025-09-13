@@ -167,7 +167,20 @@ write_files:
           for key in "${keys_to_decrypt[@]}"; do
               encrypted_value=$(read_hyperv_kvp "$key")
               if [[ -n "$encrypted_value" ]]; then
-                  decrypted_value=$(echo "$encrypted_value" | base64 -d | openssl enc -d -aes-256-cbc -K "$decrypted_aes_key" -iv 0)
+                  # Decode base64 and extract IV (first 16 bytes) and ciphertext
+                  encrypted_bytes=$(echo "$encrypted_value" | base64 -d)
+                  if [[ ${#encrypted_bytes} -lt 16 ]]; then
+                      echo "Invalid encrypted data for $key (too short)."
+                      continue
+                  fi
+                  
+                  # Extract IV (first 16 bytes) and convert to hex
+                  iv_hex=$(echo "$encrypted_bytes" | head -c 16 | xxd -p | tr -d '\n')
+                  # Extract ciphertext (remaining bytes)
+                  ciphertext=$(echo "$encrypted_bytes" | tail -c +17)
+                  
+                  # Decrypt using extracted IV
+                  decrypted_value=$(echo "$ciphertext" | openssl enc -d -aes-256-cbc -K "$decrypted_aes_key" -iv "$iv_hex")
                   if [[ -n "$decrypted_value" ]]; then
                       echo "$decrypted_value" > "$decrypted_keys_dir/$key"
                   else
@@ -178,20 +191,31 @@ write_files:
               fi
           done
 
-          # Verify the checksum of the provisioning data
+          # Function to safely read file content (empty string if file doesn't exist)
+          read_file_safe() {
+              local file="$1"
+              if [[ -f "$file" ]]; then
+                  cat "$file"
+              else
+                  echo ""
+              fi
+          }
+
+          # Verify the checksum of the provisioning data (must match PowerShell order exactly)
           concatenated_data=$(printf "%s|" \
-              "$(cat "$decrypted_keys_dir/guesthostname")" \
-              "$(cat "$decrypted_keys_dir/Guestv4ipaddr")" \
-              "$(cat "$decrypted_keys_dir/guestv4cidrprefix")" \
-              "$(cat "$decrypted_keys_dir/Guestv4defaultgw")" \
-              "$(cat "$decrypted_keys_dir/Guestv4dns1")" \
-              "$(cat "$decrypted_keys_dir/Guestv4dns2")" \
-              "$(cat "$decrypted_keys_dir/Guestnetdnssuffix")" \
-              "$(cat "$decrypted_keys_dir/guestdomainjointarget")" \
-              "$(cat "$decrypted_keys_dir/guestdomainjoinuid")" \
-              "$(cat "$decrypted_keys_dir/guestdomainjoinpw")" \
-              "$(cat "$decrypted_keys_dir/Guestlauid")" \
-              "$(cat "$decrypted_keys_dir/guestlapw")")
+              "$(read_file_safe "$decrypted_keys_dir/guesthostname")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestv4ipaddr")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestv4cidrprefix")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestv4defaultgw")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestv4dns1")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestv4dns2")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestnetdnssuffix")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestdomainjointarget")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestdomainjoinuid")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestdomainjoinpw")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestdomainjoinou")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestlauid")" \
+              "$(read_file_safe "$decrypted_keys_dir/guestlapw")")
           concatenated_data=${concatenated_data%|} # Remove trailing pipe
 
           calculated_checksum=$(echo -n "$concatenated_data" | sha256sum | awk '{print $1}')
@@ -224,9 +248,9 @@ write_files:
           fi
 
           # Configure the network with netplan if IP settings are set
-          if [[ -f "$decrypted_keys_dir/Guestv4ipaddr" && -f "$decrypted_keys_dir/Guestv4cdirprefix" && -f "$decrypted_keys_dir/Guestv4defaultgw" ]]; then
+          if [[ -f "$decrypted_keys_dir/Guestv4ipaddr" && -f "$decrypted_keys_dir/guestv4cidrprefix" && -f "$decrypted_keys_dir/Guestv4defaultgw" ]]; then
               ip_address=$(cat "$decrypted_keys_dir/Guestv4ipaddr")
-              cidr_prefix=$(cat "$decrypted_keys_dir/Guestv4cdirprefix")
+              cidr_prefix=$(cat "$decrypted_keys_dir/guestv4cidrprefix")
               default_gateway=$(cat "$decrypted_keys_dir/Guestv4defaultgw")
               dns1=$(cat "$decrypted_keys_dir/Guestv4dns1")
               dns2=$(cat "$decrypted_keys_dir/Guestv4dns2")

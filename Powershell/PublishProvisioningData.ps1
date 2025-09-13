@@ -128,12 +128,13 @@ function Publish-KvpEncryptedValue {
         [string]$AesKey
     )
 
-    # Encrypt the value using AES
+    # Encrypt the value using AES with random IV
     try {
         $aes = New-Object System.Security.Cryptography.AesManaged
         $aes.Key = [Convert]::FromBase64String($AesKey)
         $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
         $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+        $aes.GenerateIV()  # Generate a random IV
 
         $iv = $aes.IV
         $encryptor = $aes.CreateEncryptor()
@@ -141,6 +142,7 @@ function Publish-KvpEncryptedValue {
         $valueBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
         $encryptedBytes = $encryptor.TransformFinalBlock($valueBytes, 0, $valueBytes.Length)
 
+        # Prepend IV to encrypted data (IV is first 16 bytes)
         $encryptedValue = [Convert]::ToBase64String($iv + $encryptedBytes)
     }
     catch {
@@ -201,18 +203,19 @@ function Get-RsaFromGuestProvisioningKey {
 #region Provisioning Data Checksum Calculation and Publishing
 
 # Concatenate all provisioning data in a predictable order
+# Use empty string for null/undefined optional parameters to ensure consistent checksum
 $provisioningData = @(
     $GuestHostName,
-    $GuestV4IpAddr,
-    $GuestV4CidrPrefix,
-    $GuestV4DefaultGw,
-    $GuestV4Dns1,
-    $GuestV4Dns2,
-    $GuestNetDnsSuffix,
-    $GuestDomainJoinTarget,
-    $GuestDomainJoinUid,
-    $GuestDomainJoinPw,
-    $GuestDomainJoinOU
+    $(if ($GuestV4IpAddr) { $GuestV4IpAddr } else { "" }),
+    $(if ($GuestV4CidrPrefix) { $GuestV4CidrPrefix } else { "" }),
+    $(if ($GuestV4DefaultGw) { $GuestV4DefaultGw } else { "" }),
+    $(if ($GuestV4Dns1) { $GuestV4Dns1 } else { "" }),
+    $(if ($GuestV4Dns2) { $GuestV4Dns2 } else { "" }),
+    $(if ($GuestNetDnsSuffix) { $GuestNetDnsSuffix } else { "" }),
+    $(if ($GuestDomainJoinTarget) { $GuestDomainJoinTarget } else { "" }),
+    $(if ($GuestDomainJoinUid) { $GuestDomainJoinUid } else { "" }),
+    $(if ($GuestDomainJoinPw) { $GuestDomainJoinPw } else { "" }),
+    $(if ($GuestDomainJoinOU) { $GuestDomainJoinOU } else { "" }),
     $GuestLaUid,
     $GuestLaPw
 ) -join "|"
