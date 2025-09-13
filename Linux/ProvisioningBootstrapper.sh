@@ -1,6 +1,11 @@
 #!/bin/bash
 
-CDROM_PATH="$(dirname "$(realpath "$0")")"
+LOGFILE="/tmp/provisioning_service.log"
+exec > >(tee -a "$LOGFILE") 2>&1
+
+echo "Started ProvisioningBootstrapper on [$(hostname)] at [$(date '+%Y-%m-%d %H:%M:%S')] [uptime: $(uptime -p)]"
+
+CDROM_PATH="/mnt/cidata"
 TARGET_PATH="/usr/local/bin/"
 SERVICE_NAME="provisioning.service"
 SCRIPT_NAME="ProvisioningService.sh"

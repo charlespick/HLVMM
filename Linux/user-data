@@ -1,4 +1,38 @@
 #cloud-config
 runcmd:
-  - chmod +x /media/cidata/ProvisioningBootstrapper.sh
-  - /media/cidata/ProvisioningBootstrapper.sh
+  - |
+    # Find and mount the CIDATA volume reliably
+    MOUNT_POINT="/mnt/cidata"
+    mkdir -p "$MOUNT_POINT"
+    
+    # Try to find the CIDATA volume by label
+    DEVICE=$(blkid -l -t LABEL=CIDATA -o device)
+    
+    if [ -n "$DEVICE" ]; then
+      echo "Found CIDATA device: $DEVICE"
+      mount "$DEVICE" "$MOUNT_POINT"
+    else
+      echo "CIDATA device not found by label, searching all devices..."
+      # Fallback: search all CD/DVD devices
+      for device in /dev/sr* /dev/cdrom*; do
+        if [ -b "$device" ]; then
+          echo "Trying device: $device"
+          if mount "$device" "$MOUNT_POINT" 2>/dev/null; then
+            if [ -f "$MOUNT_POINT/ProvisioningBootstrapper.sh" ]; then
+              echo "Found provisioning files on $device"
+              break
+            else
+              umount "$MOUNT_POINT"
+            fi
+          fi
+        fi
+      done
+    fi
+    
+    # Execute the provisioning script if found
+    if [ -f "$MOUNT_POINT/ProvisioningBootstrapper.sh" ]; then
+      "$MOUNT_POINT/ProvisioningBootstrapper.sh"
+    else
+      echo "ERROR: ProvisioningBootstrapper.sh not found in CIDATA volume"
+      exit 1
+    fi
