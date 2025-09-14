@@ -300,7 +300,7 @@ write_files:
           
           echo "RSA key pair generated successfully"
           
-          # Convert public key to DER format and then Base64 (to match Windows CSP blob format)
+          # Convert public key to PKCS#1 RSA DER format and then Base64 (compatible with manual parsing on Windows host)
           echo "Converting public key to Base64 format..."
           public_key_der=$(openssl rsa -pubin -in "$public_key" -outform DER | base64 -w 0)
           

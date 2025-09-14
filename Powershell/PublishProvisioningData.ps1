@@ -179,24 +179,96 @@ function Get-RsaFromGuestProvisioningKey {
         return [System.Security.Cryptography.RSACng]::new($cngKey)
     }
     catch {
-        # If that fails and we're on PowerShell 7+ (method exists), try SPKI import
-        $hasImportSpki = [System.Security.Cryptography.RSA].GetMethods() |
-        Where-Object { $_.Name -eq 'ImportSubjectPublicKeyInfo' }
-
-        if ($hasImportSpki) {
-            try {
-                $rsa = [System.Security.Cryptography.RSA]::Create()
-                $bytesRead = 0
-                $rsa.ImportSubjectPublicKeyInfo($keyBytes, [ref]$bytesRead)
-                if ($bytesRead -le 0) { throw "ImportSubjectPublicKeyInfo read 0 bytes." }
-                return $rsa
+        # Fallback: Try to parse as PKCS#1 RSA public key DER format (from Linux OpenSSL)
+        try {
+            # Parse PKCS#1 RSA public key DER format manually
+            # PKCS#1 RSA public key format: SEQUENCE { modulus INTEGER, publicExponent INTEGER }
+            
+            if ($keyBytes.Length -lt 10) {
+                throw "Key too short to be valid PKCS#1 RSA public key"
             }
-            catch {
-                throw "Tried SPKI ImportSubjectPublicKeyInfo but failed: $($_.Exception.Message)"
+            
+            # Check for SEQUENCE tag (0x30)
+            if ($keyBytes[0] -ne 0x30) {
+                throw "Not a valid DER SEQUENCE (expected 0x30, got 0x$($keyBytes[0].ToString('X2')))"
             }
+            
+            # Parse length field
+            $offset = 1
+            $lengthByte = $keyBytes[$offset]
+            $offset++
+            
+            $totalLength = 0
+            if (($lengthByte -band 0x80) -eq 0) {
+                # Short form length
+                $totalLength = $lengthByte
+            } else {
+                # Long form length
+                $lengthBytes = $lengthByte -band 0x7F
+                if ($lengthBytes -gt 4) { throw "Length field too long" }
+                
+                for ($i = 0; $i -lt $lengthBytes; $i++) {
+                    $totalLength = ($totalLength -shl 8) + $keyBytes[$offset]
+                    $offset++
+                }
+            }
+            
+            # Parse modulus (first INTEGER)
+            if ($keyBytes[$offset] -ne 0x02) {
+                throw "Expected INTEGER tag for modulus (0x02), got 0x$($keyBytes[$offset].ToString('X2'))"
+            }
+            $offset++
+            
+            # Parse modulus length
+            $modulusLengthByte = $keyBytes[$offset]
+            $offset++
+            $modulusLength = 0
+            
+            if (($modulusLengthByte -band 0x80) -eq 0) {
+                $modulusLength = $modulusLengthByte
+            } else {
+                $lengthBytes = $modulusLengthByte -band 0x7F
+                for ($i = 0; $i -lt $lengthBytes; $i++) {
+                    $modulusLength = ($modulusLength -shl 8) + $keyBytes[$offset]
+                    $offset++
+                }
+            }
+            
+            # Extract modulus bytes (skip leading zero if present)
+            $modulusStart = $offset
+            if ($keyBytes[$modulusStart] -eq 0x00) {
+                $modulusStart++
+                $modulusLength--
+            }
+            
+            $modulusBytes = $keyBytes[$modulusStart..($modulusStart + $modulusLength - 1)]
+            $offset = $modulusStart + $modulusLength
+            
+            # Parse exponent (second INTEGER)
+            if ($keyBytes[$offset] -ne 0x02) {
+                throw "Expected INTEGER tag for exponent (0x02), got 0x$($keyBytes[$offset].ToString('X2'))"
+            }
+            $offset++
+            
+            # Parse exponent length
+            $exponentLength = $keyBytes[$offset]
+            $offset++
+            
+            # Extract exponent bytes
+            $exponentBytes = $keyBytes[$offset..($offset + $exponentLength - 1)]
+            
+            # Create RSA parameters
+            $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+            $rsaParams = New-Object System.Security.Cryptography.RSAParameters
+            $rsaParams.Modulus = $modulusBytes
+            $rsaParams.Exponent = $exponentBytes
+            
+            $rsa.ImportParameters($rsaParams)
+            return $rsa
         }
-
-        throw "Public key isn't a CNG RSA public blob this runtime can import. Inner: $($_.Exception.Message)"
+        catch {
+            throw "All key import methods failed. CNG error (Windows guest): $($_.Exception.Message). PKCS#1 parsing error (Linux guest): $($_.Exception.Message)."
+        }
     }
 }
 
