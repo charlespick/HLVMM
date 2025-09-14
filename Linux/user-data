@@ -14,103 +14,38 @@ write_files:
       echo "Started Provisioning on [$(hostname)] at [$(date '+%Y-%m-%d %H:%M:%S')] [uptime: $(uptime -p)]"
       
       # Check KVP daemon status - CRITICAL for provisioning
-      echo "DEBUG: Checking Hyper-V KVP daemon status..."
-      kvp_daemon_running=false
-      
-      if systemctl is-active --quiet hv-kvp-daemon; then
-          echo "DEBUG: hv-kvp-daemon is running"
-          kvp_daemon_running=true
-      elif systemctl is-active --quiet hypervkvpd; then
-          echo "DEBUG: hypervkvpd is running"
-          kvp_daemon_running=true
-      else
+      if ! systemctl is-active --quiet hv-kvp-daemon && ! systemctl is-active --quiet hypervkvpd; then
           echo "ERROR: Hyper-V KVP daemon is not running!"
-          echo "ERROR: This is required for host-guest communication during provisioning."
           echo "ERROR: Please ensure hyperv-daemons package is installed in the golden image."
-          systemctl status hv-kvp-daemon 2>/dev/null || systemctl status hypervkvpd 2>/dev/null || echo "DEBUG: No KVP daemon service found"
-          
-          # Try to start it one more time
-          echo "Attempting to start KVP daemon..."
-          if systemctl start hv-kvp-daemon 2>/dev/null || systemctl start hypervkvpd 2>/dev/null; then
-              sleep 2
-              if systemctl is-active --quiet hv-kvp-daemon || systemctl is-active --quiet hypervkvpd; then
-                  echo "Successfully started KVP daemon"
-                  kvp_daemon_running=true
-              fi
-          fi
-          
-          if [[ "$kvp_daemon_running" == false ]]; then
+          systemctl start hv-kvp-daemon 2>/dev/null || systemctl start hypervkvpd 2>/dev/null || true
+          sleep 2
+          if ! systemctl is-active --quiet hv-kvp-daemon && ! systemctl is-active --quiet hypervkvpd; then
               echo "FATAL: Cannot start Hyper-V KVP daemon. Provisioning cannot continue."
-              echo "FATAL: Please install hyperv-daemons package in your golden image."
               exit 1
           fi
-      fi
-      
-      # Check for KVP directory and permissions
-      echo "DEBUG: Checking KVP directory and permissions..."
-      if [[ -d "/var/lib/hyperv" ]]; then
-          echo "DEBUG: Found KVP directory: /var/lib/hyperv"
-          ls -la /var/lib/hyperv/ 2>/dev/null || echo "DEBUG: Cannot list /var/lib/hyperv"
-      else
-          echo "DEBUG: KVP directory not found: /var/lib/hyperv"
       fi
 
       # Function to read a key from Hyper-V KVP using the correct pool and format
       read_hyperv_kvp() {
           local key="$1"
-          echo "DEBUG: Attempting to read KVP key: $key" >&2
-
-          # Only read from pool 0 (host→guest data)
           local kvp_file="/var/lib/hyperv/.kvp_pool_0"
           
-          if [[ ! -f "$kvp_file" || ! -r "$kvp_file" ]]; then
-              echo "DEBUG: KVP pool 0 file not found or not readable: $kvp_file" >&2
-              return 1
-          fi
-
-          echo "DEBUG: Reading from KVP pool 0: $kvp_file" >&2
-          
-          # Read the file in 2560-byte records (512 bytes key + 2048 bytes value)
-          local record_size=2560
-          local key_size=512
-          local value_size=2048
-          local file_size=$(stat -c%s "$kvp_file" 2>/dev/null || echo 0)
-          
-          if [[ $file_size -eq 0 ]]; then
-              echo "DEBUG: KVP pool 0 file is empty" >&2
+          if [[ ! -f "$kvp_file" ]]; then
               return 1
           fi
           
-          # Calculate number of records
-          local num_records=$((file_size / record_size))
-          echo "DEBUG: File size: $file_size bytes, Records: $num_records" >&2
+          local nb=$(wc -c < "$kvp_file")
+          local nkv=$(( nb / (512+2048) ))
           
-          # Read each record and check for matching key
-          for ((i=0; i<num_records; i++)); do
-              local offset=$((i * record_size))
-              
-              # Extract the key (first 512 bytes, null-terminated)
-              local raw_key=$(dd if="$kvp_file" bs=1 skip=$offset count=$key_size 2>/dev/null)
-              # Extract only up to the first null byte to get the actual key
-              local record_key=$(echo -n "$raw_key" | sed 's/\x00.*//')
-              
-              if [[ "$record_key" == "$key" ]]; then
-                  echo "DEBUG: Found matching key at record $i" >&2
-                  
-                  # Extract the value (next 2048 bytes, null-terminated)
-                  local value_offset=$((offset + key_size))
-                  # Read the raw value and find the first null byte to properly terminate the string
-                  local raw_value=$(dd if="$kvp_file" bs=1 skip=$value_offset count=$value_size 2>/dev/null)
-                  # Extract only up to the first null byte to get the actual value
-                  local result=$(echo -n "$raw_value" | sed 's/\x00.*//')
-                  
-                  echo "DEBUG: Found key '$key' with value length: ${#result}" >&2
-                  echo "$result"
+          for n in $(seq 0 $(( $nkv - 1 )) ); do
+              local offset=$(( $n * (512 + 2048) ))
+              local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+              if [[ "$k" == "$key" ]]; then
+                  dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g'
                   return 0
               fi
           done
-
-          echo "DEBUG: Key not found: $key" >&2
+          
           return 1
       }
 
@@ -118,75 +53,32 @@ write_files:
       write_hyperv_kvp() {
           local key="$1"
           local value="$2"
-          echo "DEBUG: Attempting to write KVP key: $key (value length: ${#value})" >&2
 
           # Validate key and value lengths
-          if [[ ${#key} -gt 511 ]]; then
-              echo "ERROR: Key too long (${#key} > 511 characters): $key" >&2
-              return 1
-          fi
-          
-          if [[ ${#value} -gt 2047 ]]; then
-              echo "ERROR: Value too long (${#value} > 2047 characters)" >&2
+          if [[ ${#key} -gt 511 || ${#value} -gt 2047 ]]; then
+              echo "ERROR: Key or value too long" >&2
               return 1
           fi
 
-          # Only write to pool 1 (guest→host data)
           local guest_pool="/var/lib/hyperv/.kvp_pool_1"
           
           if [[ ! -w "$(dirname "$guest_pool")" ]]; then
-              echo "ERROR: Cannot write to KVP directory: $(dirname "$guest_pool")"  >&2
-              return 1
-          fi
-
-          echo "DEBUG: Writing to KVP pool 1: $guest_pool" >&2
-          
-          # Create a temporary file for the 2560-byte record
-          local temp_record="/tmp/kvp_record_$$"
-          
-          # Build the 2560-byte record: 512 bytes key + 2048 bytes value
-          # Key field: null-terminated string padded to 512 bytes
-          printf '%s' "$key" > "$temp_record"
-          local key_padding=$((511 - ${#key}))
-          if [[ $key_padding -gt 0 ]]; then
-              dd if=/dev/zero bs=1 count=$key_padding >> "$temp_record" 2>/dev/null
-          fi
-          # Add null terminator for key
-          printf '\0' >> "$temp_record"
-          
-          # Value field: null-terminated string padded to 2048 bytes  
-          printf '%s' "$value" >> "$temp_record"
-          local value_padding=$((2047 - ${#value}))
-          if [[ $value_padding -gt 0 ]]; then
-              dd if=/dev/zero bs=1 count=$value_padding >> "$temp_record" 2>/dev/null
-          fi
-          # Add null terminator for value
-          printf '\0' >> "$temp_record"
-          
-          # Verify record size
-          local record_size=$(stat -c%s "$temp_record" 2>/dev/null || echo 0)
-          if [[ $record_size -ne 2560 ]]; then
-              echo "ERROR: Invalid record size: $record_size (expected 2560)" >&2
-              rm -f "$temp_record"
+              echo "ERROR: Cannot write to KVP directory" >&2
               return 1
           fi
           
-          # Append the record to pool 1 with file locking
+          # Build the 2560-byte record directly: 512 bytes key + 2048 bytes value
           {
               flock -x 9
-              cat "$temp_record" >> "$guest_pool"
-              local write_result=$?
+              {
+                  printf '%s' "$key"
+                  dd if=/dev/zero bs=1 count=$((511 - ${#key})) 2>/dev/null
+                  printf '\0'
+                  printf '%s' "$value"
+                  dd if=/dev/zero bs=1 count=$((2047 - ${#value})) 2>/dev/null
+                  printf '\0'
+              } >> "$guest_pool"
               flock -u 9
-              
-              if [[ $write_result -eq 0 ]]; then
-                  echo "DEBUG: Successfully wrote KVP record to pool 1" >&2
-                  rm -f "$temp_record"
-                  return 0
-              else
-                  echo "ERROR: Failed to write KVP record to pool 1" >&2
-                  rm -f "$temp_record"
-                  return 1
-              fi
           } 9>>"$guest_pool"
       }
 
@@ -218,32 +110,16 @@ write_files:
 
       # Function to eject CD-ROM drives
       eject_cdroms() {
-          # Use blkid to find the CIDATA device (same as cloud-init)
-          echo "Looking for CIDATA labeled device..."
           local cidata_device=$(blkid -t LABEL=CIDATA -o device 2>/dev/null | head -1)
           
           if [[ -n "$cidata_device" ]]; then
-              echo "Found CIDATA device: $cidata_device"
-              
-              # Check if it's mounted and unmount if necessary
+              # Unmount if necessary
               local mount_point=$(mount | grep "^$cidata_device " | awk '{print $3}')
-              if [[ -n "$mount_point" ]]; then
-                  echo "CIDATA device is mounted at: $mount_point, unmounting..."
-                  if umount "$mount_point" 2>/dev/null; then
-                      echo "Successfully unmounted CIDATA device from: $mount_point"
-                  else
-                      echo "Warning: Failed to unmount CIDATA device from: $mount_point"
-                  fi
-              fi
+              [[ -n "$mount_point" ]] && umount "$mount_point" 2>/dev/null
               
-              # Eject the specific CIDATA device
-              if eject "$cidata_device" 2>/dev/null; then
-                  echo "Successfully ejected CIDATA device: $cidata_device"
-              else
-                  echo "Failed to eject CIDATA device: $cidata_device"
-              fi
-          else
-              echo "No CIDATA labeled device found - provisioning ISO already ejected or not present"
+              # Eject the device
+              eject "$cidata_device" 2>/dev/null
+              echo "Ejected CIDATA device: $cidata_device"
           fi
       }
 
@@ -261,7 +137,6 @@ write_files:
           
           while true; do
               host_state=$(read_hyperv_kvp "hostprovisioningsystemstate")
-              echo "DEBUG: hostprovisioningsystemstate = '$host_state' (elapsed: ${elapsed}s)"
               
               if [[ "$host_state" == "waitingforpublickey" ]]; then
                   echo "Host is ready for public key exchange"
@@ -270,7 +145,6 @@ write_files:
               
               if [[ $elapsed -ge $timeout ]]; then
                   echo "ERROR: Timeout waiting for host to signal 'waitingforpublickey'"
-                  echo "DEBUG: Last host state: '$host_state'"
                   return 1
               fi
               
@@ -281,7 +155,6 @@ write_files:
           # Read provisioningsystemmanifest and verify it equals provisioningsystemver1 (note: case sensitive!)
           echo "Verifying provisioning system manifest..."
           manifest=$(read_hyperv_kvp "provisioningsystemmanifest")
-          echo "DEBUG: provisioningsystemmanifest = '$manifest'"
           
           if [[ "$manifest" != "provisioningsystemver1" ]]; then
               echo "ERROR: Invalid provisioningsystemmanifest: '$manifest' (expected: 'provisioningsystemver1')"
@@ -289,8 +162,6 @@ write_files:
           fi
           
           echo "Provisioning system manifest verified successfully"
-
-          # TODO: Consider not saving keys to disk, I don't think they need to be kept if we can find a way to keep them in memory in bash
 
           # Generate a public/private key pair
           echo "Generating RSA key pair..."
@@ -308,9 +179,6 @@ write_files:
           # Convert public key to PKCS#1 RSA DER format and then Base64 (compatible with manual parsing on Windows host)
           echo "Converting public key to Base64 format..."
           public_key_der=$(openssl rsa -pubin -in "$public_key" -RSAPublicKey_out -outform DER | base64 -w 0)
-          
-          echo "DEBUG: Public key length: ${#public_key_der} characters"
-          echo "DEBUG: Public key (first 100 chars): ${public_key_der:0:100}..."
 
           # Publish the public key to guestprovisioningpublickey in KVP
           echo "Publishing public key to KVP..."
@@ -337,7 +205,6 @@ write_files:
           
           while true; do
               host_state=$(read_hyperv_kvp "hostprovisioningsystemstate")
-              echo "DEBUG: hostprovisioningsystemstate = '$host_state' (elapsed: ${elapsed}s)"
               
               if [[ "$host_state" == "provisioningdatapublished" ]]; then
                   echo "Host has published provisioning data"
@@ -346,7 +213,6 @@ write_files:
               
               if [[ $elapsed -ge $timeout ]]; then
                   echo "ERROR: Timeout waiting for host to publish provisioning data"
-                  echo "DEBUG: Last host state: '$host_state'"
                   return 1
               fi
               
@@ -361,27 +227,19 @@ write_files:
               echo "ERROR: Shared AES key not found in KVP"
               return 1
           fi
-          
-          echo "DEBUG: Shared AES key length: ${#shared_aes_key} characters"
-          echo "DEBUG: Shared AES key (first 100 chars): ${shared_aes_key:0:100}..."
 
           # Decrypt the AES key using the private key
           echo "Decrypting AES key using RSA private key..."
           decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key" -pkcs)
           if [[ -z "$decrypted_aes_key" ]]; then
-              echo "ERROR: Failed to decrypt AES key using RSA private key"
-              echo "DEBUG: Attempting alternative decryption methods..."
-              
-              # Try different padding options
               decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key")
               if [[ -z "$decrypted_aes_key" ]]; then
-                  echo "ERROR: All AES key decryption methods failed"
+                  echo "ERROR: Failed to decrypt AES key"
                   return 1
               fi
           fi
           
           echo "AES key decrypted successfully"
-          echo "DEBUG: Decrypted AES key length: ${#decrypted_aes_key} bytes"
 
           # Define the keys to decrypt (must match exactly with Windows PowerShell version)
           keys_to_decrypt=(
@@ -406,58 +264,39 @@ write_files:
 
           # Convert decrypted AES key to hex format for OpenSSL
           aes_key_hex=$(echo -n "$decrypted_aes_key" | base64 -d | xxd -p | tr -d '\n')
-          echo "DEBUG: AES key hex length: ${#aes_key_hex} characters"
 
           # Save each decrypted key to a file
           echo "Decrypting provisioning data keys..."
           for key in "${keys_to_decrypt[@]}"; do
-              echo "Processing key: $key"
               encrypted_value=$(read_hyperv_kvp "$key")
               if [[ -n "$encrypted_value" ]]; then
-                  echo "DEBUG: Encrypted value for $key found (length: ${#encrypted_value})"
-                  
-                  # Decode base64 and extract IV (first 16 bytes) and ciphertext
                   encrypted_bytes=$(echo "$encrypted_value" | base64 -d)
                   encrypted_len=${#encrypted_bytes}
                   
-                  echo "DEBUG: Encrypted bytes length for $key: $encrypted_len"
-                  
                   if [[ $encrypted_len -lt 16 ]]; then
-                      echo "ERROR: Invalid encrypted data for $key (too short: $encrypted_len bytes)"
+                      echo "ERROR: Invalid encrypted data for $key"
+                      touch "$decrypted_keys_dir/$key"
                       continue
                   fi
                   
-                  # Extract IV (first 16 bytes) and convert to hex
+                  # Extract IV (first 16 bytes) and ciphertext
                   iv_hex=$(echo "$encrypted_bytes" | head -c 16 | xxd -p | tr -d '\n')
-                  echo "DEBUG: IV for $key: $iv_hex"
-                  
-                  # Extract ciphertext (remaining bytes)
                   ciphertext_bytes=$(echo "$encrypted_bytes" | tail -c +17)
-                  ciphertext_len=${#ciphertext_bytes}
-                  echo "DEBUG: Ciphertext length for $key: $ciphertext_len bytes"
                   
-                  # Decrypt using extracted IV and AES-256-CBC with PKCS7 padding
+                  # Decrypt using extracted IV and AES-256-CBC
                   decrypted_value=$(echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad 2>/dev/null | sed 's/\x00*$//')
                   
                   if [[ -z "$decrypted_value" ]]; then
-                      # Try with PKCS7 padding
                       decrypted_value=$(echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" 2>/dev/null)
                   fi
                   
                   if [[ -n "$decrypted_value" ]]; then
                       echo "$decrypted_value" > "$decrypted_keys_dir/$key"
-                      echo "Successfully decrypted and saved key: $key"
-                      echo "DEBUG: Decrypted value for $key (length: ${#decrypted_value}): ${decrypted_value:0:50}..."
                   else
                       echo "ERROR: Failed to decrypt value for $key"
-                      echo "DEBUG: OpenSSL error details:"
-                      echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" 2>&1 || true
-                      # Create empty file to maintain consistency
                       touch "$decrypted_keys_dir/$key"
                   fi
               else
-                  echo "WARNING: Encrypted value for $key not found. Creating empty file..."
-                  # Create empty file to maintain consistency with Windows version
                   touch "$decrypted_keys_dir/$key"
               fi
           done
@@ -491,28 +330,14 @@ write_files:
               "$(read_file_safe "$decrypted_keys_dir/guestlapw")")
           concatenated_data=${concatenated_data%|} # Remove trailing pipe
 
-          echo "DEBUG: Concatenated data length: ${#concatenated_data} characters"
-          echo "DEBUG: Concatenated data (first 200 chars): ${concatenated_data:0:200}..."
-
           # Calculate checksum and encode as Base64 (to match Windows version)
-          calculated_checksum_hex=$(echo -n "$concatenated_data" | sha256sum | awk '{print $1}')
-          calculated_checksum=$(echo -n "$concatenated_data" | sha256sum -b | awk '{print $1}' | xxd -r -p | base64 -w 0)
-          
-          echo "DEBUG: Calculated checksum (hex): $calculated_checksum_hex"
-          echo "DEBUG: Calculated checksum (base64): $calculated_checksum"
-          
+          calculated_checksum=$(echo -n "$concatenated_data" | sha256sum -b | awk '{print $1}' | xxd -r -p | base64 -w 0)          
           published_checksum=$(read_hyperv_kvp "provisioningsystemchecksum")
-          echo "DEBUG: Published checksum: $published_checksum"
 
           if [[ "$calculated_checksum" != "$published_checksum" ]]; then
               echo "ERROR: Checksum verification failed!"
               echo "Expected: $published_checksum"
               echo "Got:      $calculated_checksum"
-              echo "DEBUG: Data used for checksum:"
-              for i in {0..12}; do
-                  local field=$(echo "$concatenated_data" | cut -d'|' -f$((i+1)))
-                  echo "  Field $i: '$field'"
-              done
               return 1
           fi
 
