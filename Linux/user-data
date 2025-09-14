@@ -46,140 +46,143 @@ write_files:
           fi
       fi
       
-      # Check for KVP files and permissions
-      echo "DEBUG: Checking KVP file locations and permissions..."
-      for dir in /var/lib/hyperv /var/opt/hyperv; do
-          if [[ -d "$dir" ]]; then
-              echo "DEBUG: Found directory: $dir"
-              ls -la "$dir" 2>/dev/null || echo "DEBUG: Cannot list $dir"
-          else
-              echo "DEBUG: Directory not found: $dir"
-          fi
-      done
+      # Check for KVP directory and permissions
+      echo "DEBUG: Checking KVP directory and permissions..."
+      if [[ -d "/var/lib/hyperv" ]]; then
+          echo "DEBUG: Found KVP directory: /var/lib/hyperv"
+          ls -la /var/lib/hyperv/ 2>/dev/null || echo "DEBUG: Cannot list /var/lib/hyperv"
+      else
+          echo "DEBUG: KVP directory not found: /var/lib/hyperv"
+      fi
 
-      # Function to read a key from Hyper-V KVP using only built-in tools
+      # Function to read a key from Hyper-V KVP using the correct pool and format
       read_hyperv_kvp() {
           local key="$1"
           echo "DEBUG: Attempting to read KVP key: $key" >&2
 
-          # Try multiple possible KVP pool files (host-to-guest pools typically 0-2)
-          local kvp_files=(
-              "/var/lib/hyperv/.kvp_pool_0"
-              "/var/lib/hyperv/.kvp_pool_1" 
-              "/var/lib/hyperv/.kvp_pool_2"
-              "/var/lib/hyperv/.kvp_pool_3"
-          )
+          # Only read from pool 0 (host→guest data)
+          local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+          
+          if [[ ! -f "$kvp_file" || ! -r "$kvp_file" ]]; then
+              echo "DEBUG: KVP pool 0 file not found or not readable: $kvp_file" >&2
+              return 1
+          fi
 
-          for kvp_file in "${kvp_files[@]}"; do
-              if [[ -f "$kvp_file" && -r "$kvp_file" ]]; then
-                  echo "DEBUG: Checking KVP file: $kvp_file" >&2
+          echo "DEBUG: Reading from KVP pool 0: $kvp_file" >&2
+          
+          # Read the file in 2560-byte records (512 bytes key + 2048 bytes value)
+          local record_size=2560
+          local key_size=512
+          local value_size=2048
+          local file_size=$(stat -c%s "$kvp_file" 2>/dev/null || echo 0)
+          
+          if [[ $file_size -eq 0 ]]; then
+              echo "DEBUG: KVP pool 0 file is empty" >&2
+              return 1
+          fi
+          
+          # Calculate number of records
+          local num_records=$((file_size / record_size))
+          echo "DEBUG: File size: $file_size bytes, Records: $num_records" >&2
+          
+          # Read each record and check for matching key
+          for ((i=0; i<num_records; i++)); do
+              local offset=$((i * record_size))
+              
+              # Extract the key (first 512 bytes, null-terminated)
+              local record_key=$(dd if="$kvp_file" bs=1 skip=$offset count=$key_size 2>/dev/null | tr -d '\0' | head -c 511)
+              
+              if [[ "$record_key" == "$key" ]]; then
+                  echo "DEBUG: Found matching key at record $i" >&2
                   
-                  # Method 1: Use tr to convert nulls to newlines, then awk to find key-value pairs
-                  local result=$(tr '\0' '\n' < "$kvp_file" 2>/dev/null | \
-                      awk -v search_key="$key" '
-                      BEGIN { found = 0 }
-                      {
-                          # Remove any remaining control characters and trim whitespace
-                          gsub(/[[:cntrl:]]/, "")
-                          gsub(/^[ \t]+|[ \t]+$/, "")
-                          
-                          if (found == 1 && length($0) > 0) {
-                              print $0
-                              exit 0
-                          }
-                          if ($0 == search_key) {
-                              found = 1
-                          }
-                      }' 2>/dev/null)
+                  # Extract the value (next 2048 bytes, null-terminated)
+                  local value_offset=$((offset + key_size))
+                  local result=$(dd if="$kvp_file" bs=1 skip=$value_offset count=$value_size 2>/dev/null | tr -d '\0' | head -c 2047)
                   
-                  if [[ -n "$result" ]]; then
-                      echo "DEBUG: Found key '$key' in $kvp_file" >&2
-                      echo "$result"
-                      return 0
-                  fi
-              fi
-          done
-
-          # Alternative approach: try alternate KVP locations
-          for kvp_file in /var/opt/hyperv/.kvp_pool_*; do
-              if [[ -f "$kvp_file" && -r "$kvp_file" ]]; then
-                  echo "DEBUG: Checking alternate KVP file: $kvp_file" >&2
-                  
-                  local result=$(tr '\0' '\n' < "$kvp_file" 2>/dev/null | \
-                      awk -v search_key="$key" '
-                      BEGIN { found = 0 }
-                      {
-                          gsub(/[[:cntrl:]]/, "")
-                          gsub(/^[ \t]+|[ \t]+$/, "")
-                          
-                          if (found == 1 && length($0) > 0) {
-                              print $0
-                              exit 0
-                          }
-                          if ($0 == search_key) {
-                              found = 1
-                          }
-                      }' 2>/dev/null)
-                  
-                  if [[ -n "$result" ]]; then
-                      echo "DEBUG: Found key '$key' in alternate location $kvp_file" >&2
-                      echo "$result"
-                      return 0
-                  fi
+                  echo "DEBUG: Found key '$key' with value length: ${#result}" >&2
+                  echo "$result"
+                  return 0
               fi
           done
 
           echo "DEBUG: Key not found: $key" >&2
-          echo "DEBUG: Available KVP files:" >&2
-          ls -la /var/lib/hyperv/ 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: /var/lib/hyperv/ not found" >&2
-          ls -la /var/opt/hyperv/ 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: /var/opt/hyperv/ not found" >&2
           return 1
       }
 
-      # Function to write a key-value pair to Hyper-V KVP
+      # Function to write a key-value pair to Hyper-V KVP using the correct pool and format
       write_hyperv_kvp() {
           local key="$1"
           local value="$2"
           echo "DEBUG: Attempting to write KVP key: $key (value length: ${#value})" >&2
 
-          # Try multiple approaches to write to KVP
+          # Validate key and value lengths
+          if [[ ${#key} -gt 511 ]]; then
+              echo "ERROR: Key too long (${#key} > 511 characters): $key" >&2
+              return 1
+          fi
           
-          # Method 1: Try using kvp_set_record if available
-          if command -v kvp_set_record >/dev/null 2>&1; then
-              echo "DEBUG: Using kvp_set_record utility" >&2
-              if kvp_set_record "$key" "$value"; then
-                  echo "DEBUG: Successfully wrote key using kvp_set_record" >&2
-                  return 0
-              fi
+          if [[ ${#value} -gt 2047 ]]; then
+              echo "ERROR: Value too long (${#value} > 2047 characters)" >&2
+              return 1
           fi
 
-          # Method 2: Try writing to guest exchange items pool (pool 3 typically for guest-to-host)
-          local guest_pool="/var/lib/hyperv/.kvp_pool_3"
-          if [[ -w "$(dirname "$guest_pool")" ]]; then
-              echo "DEBUG: Attempting to write to guest pool: $guest_pool" >&2
-              mkdir -p "$(dirname "$guest_pool")"
+          # Only write to pool 1 (guest→host data)
+          local guest_pool="/var/lib/hyperv/.kvp_pool_1"
+          
+          if [[ ! -w "$(dirname "$guest_pool")" ]]; then
+              echo "ERROR: Cannot write to KVP directory: $(dirname "$guest_pool")"  >&2
+              return 1
+          fi
+
+          echo "DEBUG: Writing to KVP pool 1: $guest_pool" >&2
+          
+          # Create a temporary file for the 2560-byte record
+          local temp_record="/tmp/kvp_record_$$"
+          
+          # Build the 2560-byte record: 512 bytes key + 2048 bytes value
+          # Key field: null-terminated string padded to 512 bytes
+          printf '%s' "$key" > "$temp_record"
+          local key_padding=$((511 - ${#key}))
+          if [[ $key_padding -gt 0 ]]; then
+              dd if=/dev/zero bs=1 count=$key_padding >> "$temp_record" 2>/dev/null
+          fi
+          # Add null terminator for key
+          printf '\0' >> "$temp_record"
+          
+          # Value field: null-terminated string padded to 2048 bytes  
+          printf '%s' "$value" >> "$temp_record"
+          local value_padding=$((2047 - ${#value}))
+          if [[ $value_padding -gt 0 ]]; then
+              dd if=/dev/zero bs=1 count=$value_padding >> "$temp_record" 2>/dev/null
+          fi
+          # Add null terminator for value
+          printf '\0' >> "$temp_record"
+          
+          # Verify record size
+          local record_size=$(stat -c%s "$temp_record" 2>/dev/null || echo 0)
+          if [[ $record_size -ne 2560 ]]; then
+              echo "ERROR: Invalid record size: $record_size (expected 2560)" >&2
+              rm -f "$temp_record"
+              return 1
+          fi
+          
+          # Append the record to pool 1 with file locking
+          {
+              flock -x 9
+              cat "$temp_record" >> "$guest_pool"
+              local write_result=$?
+              flock -u 9
               
-              # Create a simple record format (this may need adjustment based on actual KVP format)
-              printf "%s\x00%s\x00" "$key" "$value" >> "$guest_pool"
-              echo "DEBUG: Wrote to guest pool file" >&2
-              return 0
-          fi
-
-          # Method 3: Try alternate guest pool location
-          local alt_guest_pool="/var/opt/hyperv/.kvp_pool_3"
-          if [[ -w "$(dirname "$alt_guest_pool")" ]]; then
-              echo "DEBUG: Attempting to write to alternate guest pool: $alt_guest_pool" >&2
-              mkdir -p "$(dirname "$alt_guest_pool")"
-              printf "%s\x00%s\x00" "$key" "$value" >> "$alt_guest_pool"
-              echo "DEBUG: Wrote to alternate guest pool file" >&2
-              return 0
-          fi
-
-          echo "ERROR: Unable to write to KVP - no method available" >&2
-          echo "DEBUG: KVP daemon status:" >&2
-          systemctl status hv-kvp-daemon 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: hv-kvp-daemon not found" >&2
-          ps aux | grep kvp 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: No KVP processes found" >&2
-          return 1
+              if [[ $write_result -eq 0 ]]; then
+                  echo "DEBUG: Successfully wrote KVP record to pool 1" >&2
+                  rm -f "$temp_record"
+                  return 0
+              else
+                  echo "ERROR: Failed to write KVP record to pool 1" >&2
+                  rm -f "$temp_record"
+                  return 1
+              fi
+          } 9>>"$guest_pool"
       }
 
       # File to track service phase
