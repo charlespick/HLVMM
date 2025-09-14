@@ -74,17 +74,18 @@ write_files:
               echo "Phase file not found. Initializing..."
               initialize_phase_file
           fi
-          source "$phase_file"
+          current_phase=$(cat "$phase_file")
       }
 
       # Function to update the phase status
       update_phase_status() {
-          echo "$1" > "$phase_file"
+          local phase="$1"
+          echo "$phase" > "$phase_file"
       }
 
       phase_one() {
           echo "Starting phase one..."
-          update_phase_status "last_started_phase" "phase_one"
+          update_phase_status "phase_one"
 
           # Wait until hostprovisioningsystemstate equals waitingforpublickey
           while true; do
@@ -285,13 +286,12 @@ write_files:
               echo "Hostname set to $hostname."
           fi
           echo "Phase one completed."
-          update_phase_status "last_completed_phase" "phase_one"
           reboot
       }
 
       phase_two() {
           echo "Starting phase two..."
-          update_phase_status "last_started_phase" "phase_two"
+          update_phase_status "phase_two"
 
           # Delete the decrypted KVP data folder
           decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
@@ -310,7 +310,6 @@ write_files:
           umount "$CDROM_PATH" && echo "CD-ROM unmounted: $CDROM_PATH" || echo "Failed to unmount CD-ROM: $CDROM_PATH"
 
           echo "Phase two completed."
-          update_phase_status "last_completed_phase" "phase_two"
 
           systemctl disable "$SERVICE_NAME"
           (sleep 2 && systemctl stop "$SERVICE_NAME") &
@@ -321,7 +320,7 @@ write_files:
       }
 
       read_phase_status
-      case "$last_completed_phase" in
+      case "$current_phase" in
           "nophasestartedyet")
               phase_one
               ;;
@@ -332,7 +331,7 @@ write_files:
               echo "All phases are already completed."
               ;;
           *)
-              echo "Unknown phase status: $last_completed_phase"
+              echo "Unknown phase status: $current_phase"
               ;;
       esac
 
