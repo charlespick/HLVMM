@@ -57,12 +57,12 @@ write_files:
           fi
       done
 
-      # Function to read a key from Hyper-V KVP
+      # Function to read a key from Hyper-V KVP using only built-in tools
       read_hyperv_kvp() {
           local key="$1"
-          echo "DEBUG: Attempting to read KVP key: $key"
+          echo "DEBUG: Attempting to read KVP key: $key" >&2
 
-          # Try multiple possible KVP pool files
+          # Try multiple possible KVP pool files (host-to-guest pools typically 0-2)
           local kvp_files=(
               "/var/lib/hyperv/.kvp_pool_0"
               "/var/lib/hyperv/.kvp_pool_1" 
@@ -71,57 +71,68 @@ write_files:
           )
 
           for kvp_file in "${kvp_files[@]}"; do
-              if [[ -f "$kvp_file" ]]; then
-                  echo "DEBUG: Found KVP file: $kvp_file"
+              if [[ -f "$kvp_file" && -r "$kvp_file" ]]; then
+                  echo "DEBUG: Checking KVP file: $kvp_file" >&2
                   
-                  # Read binary KVP file format (512-byte records)
-                  local record_size=512
-                  local key_size=512
-                  local value_size=2048
+                  # Method 1: Use tr to convert nulls to newlines, then awk to find key-value pairs
+                  local result=$(tr '\0' '\n' < "$kvp_file" 2>/dev/null | \
+                      awk -v search_key="$key" '
+                      BEGIN { found = 0 }
+                      {
+                          # Remove any remaining control characters and trim whitespace
+                          gsub(/[[:cntrl:]]/, "")
+                          gsub(/^[ \t]+|[ \t]+$/, "")
+                          
+                          if (found == 1 && length($0) > 0) {
+                              print $0
+                              exit 0
+                          }
+                          if ($0 == search_key) {
+                              found = 1
+                          }
+                      }' 2>/dev/null)
                   
-                  # Use hexdump to read binary KVP file and search for our key
-                  while IFS= read -r record; do
-                      # Extract key (first 512 bytes) and value (next 2048 bytes) from each record
-                      local record_key=$(echo "$record" | cut -d$'\x00' -f1 2>/dev/null)
-                      local record_value=$(echo "$record" | cut -d$'\x00' -f2 2>/dev/null)
-                      
-                      if [[ "$record_key" == "$key" ]]; then
-                          echo "DEBUG: Found matching key in $kvp_file"
-                          echo "$record_value"
-                          return 0
-                      fi
-                  done < <(strings "$kvp_file" | grep -v '^$')
-              fi
-          done
-
-          # If binary approach fails, try using kvp_get_records if available
-          if command -v kvp_get_records >/dev/null 2>&1; then
-              echo "DEBUG: Trying kvp_get_records utility"
-              local result=$(kvp_get_records | grep "^$key=" | cut -d'=' -f2-)
-              if [[ -n "$result" ]]; then
-                  echo "DEBUG: Found key using kvp_get_records"
-                  echo "$result"
-                  return 0
-              fi
-          fi
-
-          # Try using hv_kvp_daemon approach - read from /var/opt/hyperv/.kvp_pool_*
-          for pool in /var/opt/hyperv/.kvp_pool_*; do
-              if [[ -f "$pool" ]]; then
-                  echo "DEBUG: Checking alternate pool: $pool"
-                  local result=$(strings "$pool" | grep -A1 "^$key$" | tail -1)
-                  if [[ -n "$result" && "$result" != "$key" ]]; then
-                      echo "DEBUG: Found key in alternate pool"
+                  if [[ -n "$result" ]]; then
+                      echo "DEBUG: Found key '$key' in $kvp_file" >&2
                       echo "$result"
                       return 0
                   fi
               fi
           done
 
-          echo "DEBUG: Key not found: $key"
-          echo "DEBUG: Available KVP files:"
-          ls -la /var/lib/hyperv/ 2>/dev/null || echo "DEBUG: /var/lib/hyperv/ not found"
-          ls -la /var/opt/hyperv/ 2>/dev/null || echo "DEBUG: /var/opt/hyperv/ not found"
+          # Alternative approach: try alternate KVP locations
+          for kvp_file in /var/opt/hyperv/.kvp_pool_*; do
+              if [[ -f "$kvp_file" && -r "$kvp_file" ]]; then
+                  echo "DEBUG: Checking alternate KVP file: $kvp_file" >&2
+                  
+                  local result=$(tr '\0' '\n' < "$kvp_file" 2>/dev/null | \
+                      awk -v search_key="$key" '
+                      BEGIN { found = 0 }
+                      {
+                          gsub(/[[:cntrl:]]/, "")
+                          gsub(/^[ \t]+|[ \t]+$/, "")
+                          
+                          if (found == 1 && length($0) > 0) {
+                              print $0
+                              exit 0
+                          }
+                          if ($0 == search_key) {
+                              found = 1
+                          }
+                      }' 2>/dev/null)
+                  
+                  if [[ -n "$result" ]]; then
+                      echo "DEBUG: Found key '$key' in alternate location $kvp_file" >&2
+                      echo "$result"
+                      return 0
+                  fi
+              fi
+          done
+
+          echo "DEBUG: Key not found: $key" >&2
+          echo "DEBUG: Available KVP files:" >&2
+          ls -la /var/lib/hyperv/ 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: /var/lib/hyperv/ not found" >&2
+          ls -la /var/opt/hyperv/ 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: /var/opt/hyperv/ not found" >&2
           return 1
       }
 
@@ -129,15 +140,15 @@ write_files:
       write_hyperv_kvp() {
           local key="$1"
           local value="$2"
-          echo "DEBUG: Attempting to write KVP key: $key (value length: ${#value})"
+          echo "DEBUG: Attempting to write KVP key: $key (value length: ${#value})" >&2
 
           # Try multiple approaches to write to KVP
           
           # Method 1: Try using kvp_set_record if available
           if command -v kvp_set_record >/dev/null 2>&1; then
-              echo "DEBUG: Using kvp_set_record utility"
+              echo "DEBUG: Using kvp_set_record utility" >&2
               if kvp_set_record "$key" "$value"; then
-                  echo "DEBUG: Successfully wrote key using kvp_set_record"
+                  echo "DEBUG: Successfully wrote key using kvp_set_record" >&2
                   return 0
               fi
           fi
@@ -145,29 +156,29 @@ write_files:
           # Method 2: Try writing to guest exchange items pool (pool 3 typically for guest-to-host)
           local guest_pool="/var/lib/hyperv/.kvp_pool_3"
           if [[ -w "$(dirname "$guest_pool")" ]]; then
-              echo "DEBUG: Attempting to write to guest pool: $guest_pool"
+              echo "DEBUG: Attempting to write to guest pool: $guest_pool" >&2
               mkdir -p "$(dirname "$guest_pool")"
               
               # Create a simple record format (this may need adjustment based on actual KVP format)
               printf "%s\x00%s\x00" "$key" "$value" >> "$guest_pool"
-              echo "DEBUG: Wrote to guest pool file"
+              echo "DEBUG: Wrote to guest pool file" >&2
               return 0
           fi
 
           # Method 3: Try alternate guest pool location
           local alt_guest_pool="/var/opt/hyperv/.kvp_pool_3"
           if [[ -w "$(dirname "$alt_guest_pool")" ]]; then
-              echo "DEBUG: Attempting to write to alternate guest pool: $alt_guest_pool"
+              echo "DEBUG: Attempting to write to alternate guest pool: $alt_guest_pool" >&2
               mkdir -p "$(dirname "$alt_guest_pool")"
               printf "%s\x00%s\x00" "$key" "$value" >> "$alt_guest_pool"
-              echo "DEBUG: Wrote to alternate guest pool file"
+              echo "DEBUG: Wrote to alternate guest pool file" >&2
               return 0
           fi
 
-          echo "ERROR: Unable to write to KVP - no method available"
-          echo "DEBUG: KVP daemon status:"
-          systemctl status hv-kvp-daemon 2>/dev/null || echo "DEBUG: hv-kvp-daemon not found"
-          ps aux | grep kvp || echo "DEBUG: No KVP processes found"
+          echo "ERROR: Unable to write to KVP - no method available" >&2
+          echo "DEBUG: KVP daemon status:" >&2
+          systemctl status hv-kvp-daemon 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: hv-kvp-daemon not found" >&2
+          ps aux | grep kvp 2>&1 | sed 's/^/DEBUG: /' >&2 || echo "DEBUG: No KVP processes found" >&2
           return 1
       }
 
