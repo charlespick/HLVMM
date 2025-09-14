@@ -302,7 +302,7 @@ write_files:
           
           # Convert public key to PKCS#1 RSA DER format and then Base64 (compatible with manual parsing on Windows host)
           echo "Converting public key to Base64 format..."
-          public_key_der=$(openssl rsa -pubin -in "$public_key" -outform DER | base64 -w 0)
+          public_key_der=$(openssl rsa -pubin -in "$public_key" -RSAPublicKey_out -outform DER | base64 -w 0)
           
           echo "DEBUG: Public key length: ${#public_key_der} characters"
           echo "DEBUG: Public key (first 100 chars): ${public_key_der:0:100}..."

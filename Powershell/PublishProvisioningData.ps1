@@ -258,7 +258,7 @@ function Get-RsaFromGuestProvisioningKey {
             $exponentBytes = $keyBytes[$offset..($offset + $exponentLength - 1)]
             
             # Create RSA parameters
-            $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+            $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
             $rsaParams = New-Object System.Security.Cryptography.RSAParameters
             $rsaParams.Modulus = $modulusBytes
             $rsaParams.Exponent = $exponentBytes
