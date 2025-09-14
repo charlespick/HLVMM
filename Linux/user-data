@@ -90,7 +90,9 @@ write_files:
               local offset=$((i * record_size))
               
               # Extract the key (first 512 bytes, null-terminated)
-              local record_key=$(dd if="$kvp_file" bs=1 skip=$offset count=$key_size 2>/dev/null | tr -d '\0' | head -c 511)
+              local raw_key=$(dd if="$kvp_file" bs=1 skip=$offset count=$key_size 2>/dev/null)
+              # Extract only up to the first null byte to get the actual key
+              local record_key=$(echo -n "$raw_key" | sed 's/\x00.*//')
               
               if [[ "$record_key" == "$key" ]]; then
                   echo "DEBUG: Found matching key at record $i" >&2
