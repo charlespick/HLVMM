@@ -41,7 +41,8 @@ write_files:
               local offset=$(( $n * (512 + 2048) ))
               local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
               if [[ "$k" == "$key" ]]; then
-                  dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g'
+                  local v=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+                  echo "$v"
                   return 0
               fi
           done
@@ -230,16 +231,22 @@ write_files:
 
           # Decrypt the AES key using the private key
           echo "Decrypting AES key using RSA private key..."
-          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key" -pkcs)
+          # Use pkeyutl (modern) with explicit PKCS1 padding to match Windows .NET RSAEncryptionPadding.Pkcs1
+          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkcs1)
           if [[ -z "$decrypted_aes_key" ]]; then
-              decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key")
+              # Fallback to older rsautl method
+              decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key" -pkcs)
               if [[ -z "$decrypted_aes_key" ]]; then
-                  echo "ERROR: Failed to decrypt AES key"
+                  echo "ERROR: Failed to decrypt AES key with both pkeyutl and rsautl methods"
                   return 1
               fi
           fi
           
           echo "AES key decrypted successfully"
+          
+          # Debug: Show AES key length for verification
+          aes_key_length=$(echo -n "$decrypted_aes_key" | wc -c)
+          echo "DEBUG: Decrypted AES key length: $aes_key_length bytes"
 
           # Define the keys to decrypt (must match exactly with Windows PowerShell version)
           keys_to_decrypt=(
@@ -263,39 +270,64 @@ write_files:
           mkdir -p "$decrypted_keys_dir"
 
           # Convert decrypted AES key to hex format for OpenSSL
-          aes_key_hex=$(echo -n "$decrypted_aes_key" | base64 -d | xxd -p | tr -d '\n')
+          # The decrypted AES key should be raw bytes, not base64 encoded
+          aes_key_hex=$(echo -n "$decrypted_aes_key" | xxd -p | tr -d '\n')
+          
+          # Verify AES key length (should be 32 bytes = 64 hex characters for AES-256)
+          if [[ ${#aes_key_hex} -ne 64 ]]; then
+              echo "WARNING: AES key length is ${#aes_key_hex} hex chars, expected 64. Trying base64 decode fallback..."
+              aes_key_hex=$(echo -n "$decrypted_aes_key" | base64 -d | xxd -p | tr -d '\n' 2>/dev/null)
+              if [[ ${#aes_key_hex} -ne 64 ]]; then
+                  echo "ERROR: AES key has invalid length after decryption: ${#aes_key_hex} hex chars (expected 64)"
+                  return 1
+              fi
+          fi
+          
+          echo "AES key successfully processed (${#aes_key_hex} hex characters)"
 
           # Save each decrypted key to a file
           echo "Decrypting provisioning data keys..."
           for key in "${keys_to_decrypt[@]}"; do
               encrypted_value=$(read_hyperv_kvp "$key")
               if [[ -n "$encrypted_value" ]]; then
-                  encrypted_bytes=$(echo "$encrypted_value" | base64 -d)
-                  encrypted_len=${#encrypted_bytes}
+                  # Use temporary files to handle binary data properly and avoid shell variable issues
+                  temp_encrypted="/tmp/encrypted_$key"
+                  temp_iv="/tmp/iv_$key"
+                  temp_ciphertext="/tmp/ciphertext_$key"
                   
-                  if [[ $encrypted_len -lt 16 ]]; then
-                      echo "ERROR: Invalid encrypted data for $key"
+                  # Decode base64 to temporary file
+                  echo "$encrypted_value" | base64 -d > "$temp_encrypted"
+                  
+                  # Check minimum size
+                  encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
+                  if [[ $encrypted_size -lt 16 ]]; then
+                      echo "ERROR: Invalid encrypted data for $key (size: $encrypted_size bytes)"
                       touch "$decrypted_keys_dir/$key"
+                      rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
                       continue
                   fi
                   
-                  # Extract IV (first 16 bytes) and ciphertext
-                  iv_hex=$(echo "$encrypted_bytes" | head -c 16 | xxd -p | tr -d '\n')
-                  ciphertext_bytes=$(echo "$encrypted_bytes" | tail -c +17)
+                  # Extract IV (first 16 bytes) and ciphertext using dd
+                  dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
+                  dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
                   
-                  # Decrypt using extracted IV and AES-256-CBC
-                  decrypted_value=$(echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad 2>/dev/null | sed 's/\x00*$//')
+                  # Convert IV to hex
+                  iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
                   
-                  if [[ -z "$decrypted_value" ]]; then
-                      decrypted_value=$(echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" 2>/dev/null)
-                  fi
-                  
-                  if [[ -n "$decrypted_value" ]]; then
+                  # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
+                  if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
                       echo "$decrypted_value" > "$decrypted_keys_dir/$key"
+                      echo "Successfully decrypted $key"
+                  elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
+                      echo "$decrypted_value" > "$decrypted_keys_dir/$key"
+                      echo "Successfully decrypted $key (with nopad)"
                   else
                       echo "ERROR: Failed to decrypt value for $key"
                       touch "$decrypted_keys_dir/$key"
                   fi
+                  
+                  # Clean up temporary files
+                  rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
               else
                   touch "$decrypted_keys_dir/$key"
               fi
@@ -338,6 +370,8 @@ write_files:
               echo "ERROR: Checksum verification failed!"
               echo "Expected: $published_checksum"
               echo "Got:      $calculated_checksum"
+              echo "DEBUG: Concatenated data length: ${#concatenated_data} characters"
+              echo "DEBUG: First 100 chars of concatenated data: ${concatenated_data:0:100}"
               return 1
           fi
 
