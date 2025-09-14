@@ -65,6 +65,8 @@ write_files:
 
       # Function to initialize the phase file
       initialize_phase_file() {
+          # Ensure the directory exists
+          mkdir -p "$(dirname "$phase_file")"
           echo "nophasestartedyet" > "$phase_file"
       }
 
@@ -75,6 +77,7 @@ write_files:
               initialize_phase_file
           fi
           current_phase=$(cat "$phase_file")
+          echo "Current phase status: $current_phase"
       }
 
       # Function to update the phase status
@@ -83,9 +86,43 @@ write_files:
           echo "$phase" > "$phase_file"
       }
 
+      # Function to eject CD-ROM drives
+      eject_cdroms() {
+          # Use blkid to find the CIDATA device (same as cloud-init)
+          echo "Looking for CIDATA labeled device..."
+          local cidata_device=$(blkid -t LABEL=CIDATA -o device 2>/dev/null | head -1)
+          
+          if [[ -n "$cidata_device" ]]; then
+              echo "Found CIDATA device: $cidata_device"
+              
+              # Check if it's mounted and unmount if necessary
+              local mount_point=$(mount | grep "^$cidata_device " | awk '{print $3}')
+              if [[ -n "$mount_point" ]]; then
+                  echo "CIDATA device is mounted at: $mount_point, unmounting..."
+                  if umount "$mount_point" 2>/dev/null; then
+                      echo "Successfully unmounted CIDATA device from: $mount_point"
+                  else
+                      echo "Warning: Failed to unmount CIDATA device from: $mount_point"
+                  fi
+              fi
+              
+              # Eject the specific CIDATA device
+              if eject "$cidata_device" 2>/dev/null; then
+                  echo "Successfully ejected CIDATA device: $cidata_device"
+              else
+                  echo "Failed to eject CIDATA device: $cidata_device"
+              fi
+          else
+              echo "No CIDATA labeled device found - provisioning ISO already ejected or not present"
+          fi
+      }
+
       phase_one() {
           echo "Starting phase one..."
           update_phase_status "phase_one"
+
+          # Eject CD-ROM drives early to prevent interference with reboots
+          eject_cdroms
 
           # Wait until hostprovisioningsystemstate equals waitingforpublickey
           while true; do
@@ -304,10 +341,6 @@ write_files:
           SERVICE_NAME="provisioning.service"
           TARGET_PATH="/usr/local/bin"
           SCRIPT_NAME="ProvisioningService.sh"
-
-          # Unmount (eject) the CD-ROM
-          CDROM_PATH="$(dirname "$(realpath "$0")")"
-          umount "$CDROM_PATH" && echo "CD-ROM unmounted: $CDROM_PATH" || echo "Failed to unmount CD-ROM: $CDROM_PATH"
 
           echo "Phase two completed."
 
