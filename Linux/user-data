@@ -97,7 +97,10 @@ write_files:
                   
                   # Extract the value (next 2048 bytes, null-terminated)
                   local value_offset=$((offset + key_size))
-                  local result=$(dd if="$kvp_file" bs=1 skip=$value_offset count=$value_size 2>/dev/null | tr -d '\0' | head -c 2047)
+                  # Read the raw value and find the first null byte to properly terminate the string
+                  local raw_value=$(dd if="$kvp_file" bs=1 skip=$value_offset count=$value_size 2>/dev/null)
+                  # Extract only up to the first null byte to get the actual value
+                  local result=$(echo -n "$raw_value" | sed 's/\x00.*//')
                   
                   echo "DEBUG: Found key '$key' with value length: ${#result}" >&2
                   echo "$result"
