@@ -12,28 +12,116 @@ write_files:
       exec > >(tee -a "$LOGFILE") 2>&1
 
       echo "Started Provisioning on [$(hostname)] at [$(date '+%Y-%m-%d %H:%M:%S')] [uptime: $(uptime -p)]"
+      
+      # Check KVP daemon status - CRITICAL for provisioning
+      echo "DEBUG: Checking Hyper-V KVP daemon status..."
+      kvp_daemon_running=false
+      
+      if systemctl is-active --quiet hv-kvp-daemon; then
+          echo "DEBUG: hv-kvp-daemon is running"
+          kvp_daemon_running=true
+      elif systemctl is-active --quiet hypervkvpd; then
+          echo "DEBUG: hypervkvpd is running"
+          kvp_daemon_running=true
+      else
+          echo "ERROR: Hyper-V KVP daemon is not running!"
+          echo "ERROR: This is required for host-guest communication during provisioning."
+          echo "ERROR: Please ensure hyperv-daemons package is installed in the golden image."
+          systemctl status hv-kvp-daemon 2>/dev/null || systemctl status hypervkvpd 2>/dev/null || echo "DEBUG: No KVP daemon service found"
+          
+          # Try to start it one more time
+          echo "Attempting to start KVP daemon..."
+          if systemctl start hv-kvp-daemon 2>/dev/null || systemctl start hypervkvpd 2>/dev/null; then
+              sleep 2
+              if systemctl is-active --quiet hv-kvp-daemon || systemctl is-active --quiet hypervkvpd; then
+                  echo "Successfully started KVP daemon"
+                  kvp_daemon_running=true
+              fi
+          fi
+          
+          if [[ "$kvp_daemon_running" == false ]]; then
+              echo "FATAL: Cannot start Hyper-V KVP daemon. Provisioning cannot continue."
+              echo "FATAL: Please install hyperv-daemons package in your golden image."
+              exit 1
+          fi
+      fi
+      
+      # Check for KVP files and permissions
+      echo "DEBUG: Checking KVP file locations and permissions..."
+      for dir in /var/lib/hyperv /var/opt/hyperv; do
+          if [[ -d "$dir" ]]; then
+              echo "DEBUG: Found directory: $dir"
+              ls -la "$dir" 2>/dev/null || echo "DEBUG: Cannot list $dir"
+          else
+              echo "DEBUG: Directory not found: $dir"
+          fi
+      done
 
       # Function to read a key from Hyper-V KVP
       read_hyperv_kvp() {
           local key="$1"
-          local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+          echo "DEBUG: Attempting to read KVP key: $key"
 
-          if [[ ! -f "$kvp_file" ]]; then
-              echo "KVP file not found: $kvp_file"
-              return 1
-          fi
+          # Try multiple possible KVP pool files
+          local kvp_files=(
+              "/var/lib/hyperv/.kvp_pool_0"
+              "/var/lib/hyperv/.kvp_pool_1" 
+              "/var/lib/hyperv/.kvp_pool_2"
+              "/var/lib/hyperv/.kvp_pool_3"
+          )
 
-          while IFS= read -r line; do
-              kvp_key=$(echo "$line" | cut -d' ' -f1)
-              kvp_value=$(echo "$line" | cut -d' ' -f2-)
+          for kvp_file in "${kvp_files[@]}"; do
+              if [[ -f "$kvp_file" ]]; then
+                  echo "DEBUG: Found KVP file: $kvp_file"
+                  
+                  # Read binary KVP file format (512-byte records)
+                  local record_size=512
+                  local key_size=512
+                  local value_size=2048
+                  
+                  # Use hexdump to read binary KVP file and search for our key
+                  while IFS= read -r record; do
+                      # Extract key (first 512 bytes) and value (next 2048 bytes) from each record
+                      local record_key=$(echo "$record" | cut -d$'\x00' -f1 2>/dev/null)
+                      local record_value=$(echo "$record" | cut -d$'\x00' -f2 2>/dev/null)
+                      
+                      if [[ "$record_key" == "$key" ]]; then
+                          echo "DEBUG: Found matching key in $kvp_file"
+                          echo "$record_value"
+                          return 0
+                      fi
+                  done < <(strings "$kvp_file" | grep -v '^$')
+              fi
+          done
 
-              if [[ "$kvp_key" == "$key" ]]; then
-                  echo "$kvp_value"
+          # If binary approach fails, try using kvp_get_records if available
+          if command -v kvp_get_records >/dev/null 2>&1; then
+              echo "DEBUG: Trying kvp_get_records utility"
+              local result=$(kvp_get_records | grep "^$key=" | cut -d'=' -f2-)
+              if [[ -n "$result" ]]; then
+                  echo "DEBUG: Found key using kvp_get_records"
+                  echo "$result"
                   return 0
               fi
-          done < "$kvp_file"
+          fi
 
-          echo "Key not found: $key"
+          # Try using hv_kvp_daemon approach - read from /var/opt/hyperv/.kvp_pool_*
+          for pool in /var/opt/hyperv/.kvp_pool_*; do
+              if [[ -f "$pool" ]]; then
+                  echo "DEBUG: Checking alternate pool: $pool"
+                  local result=$(strings "$pool" | grep -A1 "^$key$" | tail -1)
+                  if [[ -n "$result" && "$result" != "$key" ]]; then
+                      echo "DEBUG: Found key in alternate pool"
+                      echo "$result"
+                      return 0
+                  fi
+              fi
+          done
+
+          echo "DEBUG: Key not found: $key"
+          echo "DEBUG: Available KVP files:"
+          ls -la /var/lib/hyperv/ 2>/dev/null || echo "DEBUG: /var/lib/hyperv/ not found"
+          ls -la /var/opt/hyperv/ 2>/dev/null || echo "DEBUG: /var/opt/hyperv/ not found"
           return 1
       }
 
@@ -41,23 +129,46 @@ write_files:
       write_hyperv_kvp() {
           local key="$1"
           local value="$2"
-          local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+          echo "DEBUG: Attempting to write KVP key: $key (value length: ${#value})"
 
-          if [[ ! -f "$kvp_file" ]]; then
-              echo "KVP file not found: $kvp_file"
-              return 1
+          # Try multiple approaches to write to KVP
+          
+          # Method 1: Try using kvp_set_record if available
+          if command -v kvp_set_record >/dev/null 2>&1; then
+              echo "DEBUG: Using kvp_set_record utility"
+              if kvp_set_record "$key" "$value"; then
+                  echo "DEBUG: Successfully wrote key using kvp_set_record"
+                  return 0
+              fi
           fi
 
-          # Check if the key already exists
-          if grep -q "^$key " "$kvp_file"; then
-              # Update existing key
-              sed -i "s|^$key .*|$key $value|" "$kvp_file"
-          else
-              # Add new key-value pair
-              echo "$key $value" >> "$kvp_file"
+          # Method 2: Try writing to guest exchange items pool (pool 3 typically for guest-to-host)
+          local guest_pool="/var/lib/hyperv/.kvp_pool_3"
+          if [[ -w "$(dirname "$guest_pool")" ]]; then
+              echo "DEBUG: Attempting to write to guest pool: $guest_pool"
+              mkdir -p "$(dirname "$guest_pool")"
+              
+              # Create a simple record format (this may need adjustment based on actual KVP format)
+              printf "%s\x00%s\x00" "$key" "$value" >> "$guest_pool"
+              echo "DEBUG: Wrote to guest pool file"
+              return 0
           fi
 
-          return 0
+          # Method 3: Try alternate guest pool location
+          local alt_guest_pool="/var/opt/hyperv/.kvp_pool_3"
+          if [[ -w "$(dirname "$alt_guest_pool")" ]]; then
+              echo "DEBUG: Attempting to write to alternate guest pool: $alt_guest_pool"
+              mkdir -p "$(dirname "$alt_guest_pool")"
+              printf "%s\x00%s\x00" "$key" "$value" >> "$alt_guest_pool"
+              echo "DEBUG: Wrote to alternate guest pool file"
+              return 0
+          fi
+
+          echo "ERROR: Unable to write to KVP - no method available"
+          echo "DEBUG: KVP daemon status:"
+          systemctl status hv-kvp-daemon 2>/dev/null || echo "DEBUG: hv-kvp-daemon not found"
+          ps aux | grep kvp || echo "DEBUG: No KVP processes found"
+          return 1
       }
 
       # File to track service phase
@@ -125,75 +236,148 @@ write_files:
           eject_cdroms
 
           # Wait until hostprovisioningsystemstate equals waitingforpublickey
+          echo "Waiting for host to signal 'waitingforpublickey'..."
+          local timeout=300 # 5 minutes
+          local elapsed=0
+          
           while true; do
               host_state=$(read_hyperv_kvp "hostprovisioningsystemstate")
+              echo "DEBUG: hostprovisioningsystemstate = '$host_state' (elapsed: ${elapsed}s)"
+              
               if [[ "$host_state" == "waitingforpublickey" ]]; then
+                  echo "Host is ready for public key exchange"
                   break
               fi
-              sleep 1
+              
+              if [[ $elapsed -ge $timeout ]]; then
+                  echo "ERROR: Timeout waiting for host to signal 'waitingforpublickey'"
+                  echo "DEBUG: Last host state: '$host_state'"
+                  return 1
+              fi
+              
+              sleep 5
+              elapsed=$((elapsed + 5))
           done
 
-          # Read provisioningsystemmanifest and verify it equals Provisioningsystemver1
+          # Read provisioningsystemmanifest and verify it equals provisioningsystemver1 (note: case sensitive!)
+          echo "Verifying provisioning system manifest..."
           manifest=$(read_hyperv_kvp "provisioningsystemmanifest")
-          if [[ "$manifest" != "Provisioningsystemver1" ]]; then
-              echo "Invalid provisioningsystemmanifest: $manifest"
+          echo "DEBUG: provisioningsystemmanifest = '$manifest'"
+          
+          if [[ "$manifest" != "provisioningsystemver1" ]]; then
+              echo "ERROR: Invalid provisioningsystemmanifest: '$manifest' (expected: 'provisioningsystemver1')"
               return 1
           fi
+          
+          echo "Provisioning system manifest verified successfully"
 
           # TODO: Consider not saving keys to disk, I don't think they need to be kept if we can find a way to keep them in memory in bash
 
           # Generate a public/private key pair
+          echo "Generating RSA key pair..."
           key_dir="/var/lib/hyperv/keys"
           mkdir -p "$key_dir"
           private_key="$key_dir/private_key.pem"
           public_key="$key_dir/public_key.pem"
+          
+          # Generate 2048-bit RSA key pair
           openssl genpkey -algorithm RSA -out "$private_key" -pkeyopt rsa_keygen_bits:2048
           openssl rsa -pubout -in "$private_key" -out "$public_key"
+          
+          echo "RSA key pair generated successfully"
+          
+          # Convert public key to DER format and then Base64 (to match Windows CSP blob format)
+          echo "Converting public key to Base64 format..."
+          public_key_der=$(openssl rsa -pubin -in "$public_key" -outform DER | base64 -w 0)
+          
+          echo "DEBUG: Public key length: ${#public_key_der} characters"
+          echo "DEBUG: Public key (first 100 chars): ${public_key_der:0:100}..."
 
           # Publish the public key to guestprovisioningpublickey in KVP
-          public_key_content=$(cat "$public_key")
-          write_hyperv_kvp "guestprovisioningpublickey" "$public_key_content"
+          echo "Publishing public key to KVP..."
+          if write_hyperv_kvp "guestprovisioningpublickey" "$public_key_der"; then
+              echo "Public key published successfully"
+          else
+              echo "ERROR: Failed to publish public key"
+              return 1
+          fi
 
-          # Set guestprovisioningstate to waitingforaeskey
-          write_hyperv_kvp "guestprovisioningstate" "waitingforaeskey"
+          # Set guestprovisioningsystemstate to waitingforaeskey (note: correct key name!)
+          echo "Setting guest state to 'waitingforaeskey'..."
+          if write_hyperv_kvp "guestprovisioningsystemstate" "waitingforaeskey"; then
+              echo "Guest state set successfully"
+          else
+              echo "ERROR: Failed to set guest state"
+              return 1
+          fi
 
-          # Wait for hostprovisioningstate to equal provisioningdatapublished
+          # Wait for hostprovisioningsystemstate to equal provisioningdatapublished (note: correct key name!)
+          echo "Waiting for host to publish provisioning data..."
+          timeout=300 # 5 minutes
+          elapsed=0
+          
           while true; do
-              host_state=$(read_hyperv_kvp "hostprovisioningstate")
+              host_state=$(read_hyperv_kvp "hostprovisioningsystemstate")
+              echo "DEBUG: hostprovisioningsystemstate = '$host_state' (elapsed: ${elapsed}s)"
+              
               if [[ "$host_state" == "provisioningdatapublished" ]]; then
+                  echo "Host has published provisioning data"
                   break
               fi
-              sleep 1
+              
+              if [[ $elapsed -ge $timeout ]]; then
+                  echo "ERROR: Timeout waiting for host to publish provisioning data"
+                  echo "DEBUG: Last host state: '$host_state'"
+                  return 1
+              fi
+              
+              sleep 5
+              elapsed=$((elapsed + 5))
           done
 
           # Read the shared AES key from KVP
+          echo "Reading shared AES key from KVP..."
           shared_aes_key=$(read_hyperv_kvp "sharedaeskey")
           if [[ -z "$shared_aes_key" ]]; then
-              echo "Shared AES key not found."
+              echo "ERROR: Shared AES key not found in KVP"
               return 1
           fi
+          
+          echo "DEBUG: Shared AES key length: ${#shared_aes_key} characters"
+          echo "DEBUG: Shared AES key (first 100 chars): ${shared_aes_key:0:100}..."
 
           # Decrypt the AES key using the private key
-          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key")
+          echo "Decrypting AES key using RSA private key..."
+          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key" -pkcs)
           if [[ -z "$decrypted_aes_key" ]]; then
-              echo "Failed to decrypt AES key."
-              return 1
+              echo "ERROR: Failed to decrypt AES key using RSA private key"
+              echo "DEBUG: Attempting alternative decryption methods..."
+              
+              # Try different padding options
+              decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key")
+              if [[ -z "$decrypted_aes_key" ]]; then
+                  echo "ERROR: All AES key decryption methods failed"
+                  return 1
+              fi
           fi
+          
+          echo "AES key decrypted successfully"
+          echo "DEBUG: Decrypted AES key length: ${#decrypted_aes_key} bytes"
 
-          # Define the keys to decrypt
+          # Define the keys to decrypt (must match exactly with Windows PowerShell version)
           keys_to_decrypt=(
               "guesthostname"
-              "Guestv4ipaddr"
+              "guestv4ipaddr"
               "guestv4cidrprefix"
-              "Guestv4defaultgw"
-              "Guestv4dns1"
-              "Guestv4dns2"
-              "Guestnetdnssuffix"
+              "guestv4defaultgw"
+              "guestv4dns1"
+              "guestv4dns2"
+              "guestnetdnssuffix"
               "guestdomainjointarget"
               "guestdomainjoinuid"
               "guestdomainjoinpw"
               "guestdomainjoinou"
-              "Guestlauid"
+              "guestlauid"
               "guestlapw"
           )
 
@@ -201,31 +385,61 @@ write_files:
           decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
           mkdir -p "$decrypted_keys_dir"
 
+          # Convert decrypted AES key to hex format for OpenSSL
+          aes_key_hex=$(echo -n "$decrypted_aes_key" | base64 -d | xxd -p | tr -d '\n')
+          echo "DEBUG: AES key hex length: ${#aes_key_hex} characters"
+
           # Save each decrypted key to a file
+          echo "Decrypting provisioning data keys..."
           for key in "${keys_to_decrypt[@]}"; do
+              echo "Processing key: $key"
               encrypted_value=$(read_hyperv_kvp "$key")
               if [[ -n "$encrypted_value" ]]; then
+                  echo "DEBUG: Encrypted value for $key found (length: ${#encrypted_value})"
+                  
                   # Decode base64 and extract IV (first 16 bytes) and ciphertext
                   encrypted_bytes=$(echo "$encrypted_value" | base64 -d)
-                  if [[ ${#encrypted_bytes} -lt 16 ]]; then
-                      echo "Invalid encrypted data for $key (too short)."
+                  encrypted_len=${#encrypted_bytes}
+                  
+                  echo "DEBUG: Encrypted bytes length for $key: $encrypted_len"
+                  
+                  if [[ $encrypted_len -lt 16 ]]; then
+                      echo "ERROR: Invalid encrypted data for $key (too short: $encrypted_len bytes)"
                       continue
                   fi
                   
                   # Extract IV (first 16 bytes) and convert to hex
                   iv_hex=$(echo "$encrypted_bytes" | head -c 16 | xxd -p | tr -d '\n')
-                  # Extract ciphertext (remaining bytes)
-                  ciphertext=$(echo "$encrypted_bytes" | tail -c +17)
+                  echo "DEBUG: IV for $key: $iv_hex"
                   
-                  # Decrypt using extracted IV
-                  decrypted_value=$(echo "$ciphertext" | openssl enc -d -aes-256-cbc -K "$decrypted_aes_key" -iv "$iv_hex")
+                  # Extract ciphertext (remaining bytes)
+                  ciphertext_bytes=$(echo "$encrypted_bytes" | tail -c +17)
+                  ciphertext_len=${#ciphertext_bytes}
+                  echo "DEBUG: Ciphertext length for $key: $ciphertext_len bytes"
+                  
+                  # Decrypt using extracted IV and AES-256-CBC with PKCS7 padding
+                  decrypted_value=$(echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad 2>/dev/null | sed 's/\x00*$//')
+                  
+                  if [[ -z "$decrypted_value" ]]; then
+                      # Try with PKCS7 padding
+                      decrypted_value=$(echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" 2>/dev/null)
+                  fi
+                  
                   if [[ -n "$decrypted_value" ]]; then
                       echo "$decrypted_value" > "$decrypted_keys_dir/$key"
+                      echo "Successfully decrypted and saved key: $key"
+                      echo "DEBUG: Decrypted value for $key (length: ${#decrypted_value}): ${decrypted_value:0:50}..."
                   else
-                      echo "Failed to decrypt value for $key."
+                      echo "ERROR: Failed to decrypt value for $key"
+                      echo "DEBUG: OpenSSL error details:"
+                      echo -n "$ciphertext_bytes" | openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" 2>&1 || true
+                      # Create empty file to maintain consistency
+                      touch "$decrypted_keys_dir/$key"
                   fi
               else
-                  echo "Encrypted value for $key not found. Skipping..."
+                  echo "WARNING: Encrypted value for $key not found. Creating empty file..."
+                  # Create empty file to maintain consistency with Windows version
+                  touch "$decrypted_keys_dir/$key"
               fi
           done
 
@@ -240,6 +454,8 @@ write_files:
           }
 
           # Verify the checksum of the provisioning data (must match PowerShell order exactly)
+          echo "Verifying provisioning data checksum..."
+          
           concatenated_data=$(printf "%s|" \
               "$(read_file_safe "$decrypted_keys_dir/guesthostname")" \
               "$(read_file_safe "$decrypted_keys_dir/guestv4ipaddr")" \
@@ -256,28 +472,54 @@ write_files:
               "$(read_file_safe "$decrypted_keys_dir/guestlapw")")
           concatenated_data=${concatenated_data%|} # Remove trailing pipe
 
-          calculated_checksum=$(echo -n "$concatenated_data" | sha256sum | awk '{print $1}')
+          echo "DEBUG: Concatenated data length: ${#concatenated_data} characters"
+          echo "DEBUG: Concatenated data (first 200 chars): ${concatenated_data:0:200}..."
+
+          # Calculate checksum and encode as Base64 (to match Windows version)
+          calculated_checksum_hex=$(echo -n "$concatenated_data" | sha256sum | awk '{print $1}')
+          calculated_checksum=$(echo -n "$concatenated_data" | sha256sum -b | awk '{print $1}' | xxd -r -p | base64 -w 0)
+          
+          echo "DEBUG: Calculated checksum (hex): $calculated_checksum_hex"
+          echo "DEBUG: Calculated checksum (base64): $calculated_checksum"
+          
           published_checksum=$(read_hyperv_kvp "provisioningsystemchecksum")
+          echo "DEBUG: Published checksum: $published_checksum"
 
           if [[ "$calculated_checksum" != "$published_checksum" ]]; then
-              echo "Checksum verification failed. Expected: $published_checksum, Got: $calculated_checksum"
+              echo "ERROR: Checksum verification failed!"
+              echo "Expected: $published_checksum"
+              echo "Got:      $calculated_checksum"
+              echo "DEBUG: Data used for checksum:"
+              for i in {0..12}; do
+                  local field=$(echo "$concatenated_data" | cut -d'|' -f$((i+1)))
+                  echo "  Field $i: '$field'"
+              done
               return 1
           fi
 
           echo "Checksum verification succeeded."
 
           # Set the password for the local admin account if both guestlauid and guestlapw are set
-          if [[ -f "$decrypted_keys_dir/Guestlauid" && -f "$decrypted_keys_dir/guestlapw" ]]; then
-              local_admin_user=$(cat "$decrypted_keys_dir/Guestlauid")
+          if [[ -f "$decrypted_keys_dir/guestlauid" && -f "$decrypted_keys_dir/guestlapw" ]]; then
+              local_admin_user=$(cat "$decrypted_keys_dir/guestlauid")
               local_admin_password=$(cat "$decrypted_keys_dir/guestlapw")
 
-              if id "$local_admin_user" &>/dev/null; then
-                  echo "$local_admin_user:$local_admin_password" | chpasswd
+              if [[ -n "$local_admin_user" && -n "$local_admin_password" ]]; then
+                  if id "$local_admin_user" &>/dev/null; then
+                      echo "$local_admin_user:$local_admin_password" | chpasswd
+                      echo "Updated password for existing user: $local_admin_user"
+                  else
+                      useradd -m -s /bin/bash "$local_admin_user"
+                      echo "$local_admin_user:$local_admin_password" | chpasswd
+                      # Add to sudo group
+                      usermod -aG sudo "$local_admin_user" 2>/dev/null || usermod -aG wheel "$local_admin_user" 2>/dev/null || true
+                      echo "Created local admin account: $local_admin_user"
+                  fi
               else
-                  useradd -m -s /bin/bash "$local_admin_user"
-                  echo "$local_admin_user:$local_admin_password" | chpasswd
+                  echo "WARNING: Local admin credentials are empty"
               fi
-              echo "Local admin account configured."
+          else
+              echo "INFO: Local admin account not configured (credentials not provided)"
           fi
 
           # Ignore domain join parameters
@@ -286,13 +528,13 @@ write_files:
           fi
 
           # Configure the network with netplan if IP settings are set
-          if [[ -f "$decrypted_keys_dir/Guestv4ipaddr" && -f "$decrypted_keys_dir/guestv4cidrprefix" && -f "$decrypted_keys_dir/Guestv4defaultgw" ]]; then
-              ip_address=$(cat "$decrypted_keys_dir/Guestv4ipaddr")
+          if [[ -f "$decrypted_keys_dir/guestv4ipaddr" && -f "$decrypted_keys_dir/guestv4cidrprefix" && -f "$decrypted_keys_dir/guestv4defaultgw" ]]; then
+              ip_address=$(cat "$decrypted_keys_dir/guestv4ipaddr")
               cidr_prefix=$(cat "$decrypted_keys_dir/guestv4cidrprefix")
-              default_gateway=$(cat "$decrypted_keys_dir/Guestv4defaultgw")
-              dns1=$(cat "$decrypted_keys_dir/Guestv4dns1")
-              dns2=$(cat "$decrypted_keys_dir/Guestv4dns2")
-              dns_suffix=$(cat "$decrypted_keys_dir/Guestnetdnssuffix")
+              default_gateway=$(cat "$decrypted_keys_dir/guestv4defaultgw")
+              dns1=$(cat "$decrypted_keys_dir/guestv4dns1")
+              dns2=$(cat "$decrypted_keys_dir/guestv4dns2")
+              dns_suffix=$(cat "$decrypted_keys_dir/guestnetdnssuffix")
 
               netplan_config="/etc/netplan/01-netcfg.yaml"
               cat > "$netplan_config" <<EOF
@@ -386,8 +628,10 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-# 3. Enable and start the service
+# 3. Start provisioning service
 runcmd:
+  # Wait a moment for KVP daemon to initialize
+  - sleep 5
   - systemctl daemon-reload
   - systemctl enable provisioning.service
   - systemctl start provisioning.service
