@@ -231,15 +231,11 @@ write_files:
 
           # Decrypt the AES key using the private key
           echo "Decrypting AES key using RSA private key..."
-          # Use pkeyutl (modern) with explicit PKCS1 padding to match Windows .NET RSAEncryptionPadding.Pkcs1
-          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkcs1)
+          # Use pkeyutl with explicit PKCS#1 padding to match Windows .NET RSAEncryptionPadding.Pkcs1
+          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt pad:pkcs1)
           if [[ -z "$decrypted_aes_key" ]]; then
-              # Fallback to older rsautl method
-              decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl rsautl -decrypt -inkey "$private_key" -pkcs)
-              if [[ -z "$decrypted_aes_key" ]]; then
-                  echo "ERROR: Failed to decrypt AES key with both pkeyutl and rsautl methods"
-                  return 1
-              fi
+              echo "ERROR: Failed to decrypt AES key using pkeyutl with PKCS#1 padding"
+              return 1
           fi
           
           echo "AES key decrypted successfully"
