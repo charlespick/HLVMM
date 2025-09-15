@@ -372,27 +372,32 @@ write_files:
 
           echo "Checksum verification succeeded."
 
-          # Set the password for the local admin account if both guestlauid and guestlapw are set
-          if [[ -f "$decrypted_keys_dir/guestlauid" && -f "$decrypted_keys_dir/guestlapw" ]]; then
-              local_admin_user=$(cat "$decrypted_keys_dir/guestlauid")
-              local_admin_password=$(cat "$decrypted_keys_dir/guestlapw")
+          # Configure local admin account if credentials are provided and non-empty
+          local_admin_user=$(read_file_safe "$decrypted_keys_dir/guestlauid" | tr -d '\0\r\n' | xargs)
+          local_admin_password=$(read_file_safe "$decrypted_keys_dir/guestlapw" | tr -d '\0\r\n' | xargs)
 
-              if [[ -n "$local_admin_user" && -n "$local_admin_password" ]]; then
-                  if id "$local_admin_user" &>/dev/null; then
-                      echo "$local_admin_user:$local_admin_password" | chpasswd
-                      echo "Updated password for existing user: $local_admin_user"
-                  else
-                      useradd -m -s /bin/bash "$local_admin_user"
-                      echo "$local_admin_user:$local_admin_password" | chpasswd
-                      # Add to sudo group
-                      usermod -aG sudo "$local_admin_user" 2>/dev/null || usermod -aG wheel "$local_admin_user" 2>/dev/null || true
-                      echo "Created local admin account: $local_admin_user"
-                  fi
+          if [[ -n "$local_admin_user" && -n "$local_admin_password" ]]; then
+              if id "$local_admin_user" &>/dev/null; then
+                  echo "$local_admin_user:$local_admin_password" | chpasswd
+                  echo "Updated password for existing user: $local_admin_user"
               else
-                  echo "WARNING: Local admin credentials are empty"
+                  useradd -m -s /bin/bash "$local_admin_user"
+                  echo "$local_admin_user:$local_admin_password" | chpasswd
+                  # Add to sudo group for administrative privileges
+                  usermod -aG sudo "$local_admin_user" 2>/dev/null || usermod -aG wheel "$local_admin_user" 2>/dev/null || true
+                  echo "Created local admin account: $local_admin_user"
+              fi
+              
+              # Ensure the user is in the admin/sudo group
+              if groups "$local_admin_user" | grep -qE '\b(sudo|wheel)\b'; then
+                  echo "User $local_admin_user has administrative privileges."
+              else
+                  echo "WARNING: User $local_admin_user may not have administrative privileges."
               fi
           else
-              echo "INFO: Local admin account not configured (credentials not provided)"
+              echo "Local admin credentials not provided or incomplete. Skipping local account configuration."
+              echo "  Username: ${local_admin_user:-'<empty>'}"
+              echo "  Password: ${local_admin_password:+<provided>}${local_admin_password:-<empty>}"
           fi
 
           # Ignore domain join parameters
@@ -400,42 +405,87 @@ write_files:
               echo "Domain join parameters detected but ignored (not supported on Linux)."
           fi
 
-          # Configure the network with netplan if IP settings are set
-          if [[ -f "$decrypted_keys_dir/guestv4ipaddr" && -f "$decrypted_keys_dir/guestv4cidrprefix" && -f "$decrypted_keys_dir/guestv4defaultgw" ]]; then
-              ip_address=$(cat "$decrypted_keys_dir/guestv4ipaddr")
-              cidr_prefix=$(cat "$decrypted_keys_dir/guestv4cidrprefix")
-              default_gateway=$(cat "$decrypted_keys_dir/guestv4defaultgw")
-              dns1=$(cat "$decrypted_keys_dir/guestv4dns1")
-              dns2=$(cat "$decrypted_keys_dir/guestv4dns2")
-              dns_suffix=$(cat "$decrypted_keys_dir/guestnetdnssuffix")
-
+          # Configure the network with netplan if IP settings are complete and valid
+          # Read network configuration values safely
+          ip_address=$(read_file_safe "$decrypted_keys_dir/guestv4ipaddr" | tr -d '\0\r\n' | xargs)
+          cidr_prefix=$(read_file_safe "$decrypted_keys_dir/guestv4cidrprefix" | tr -d '\0\r\n' | xargs)
+          default_gateway=$(read_file_safe "$decrypted_keys_dir/guestv4defaultgw" | tr -d '\0\r\n' | xargs)
+          dns1=$(read_file_safe "$decrypted_keys_dir/guestv4dns1" | tr -d '\0\r\n' | xargs)
+          dns2=$(read_file_safe "$decrypted_keys_dir/guestv4dns2" | tr -d '\0\r\n' | xargs)
+          dns_suffix=$(read_file_safe "$decrypted_keys_dir/guestnetdnssuffix" | tr -d '\0\r\n' | xargs)
+          
+          # Check if all required network parameters are provided and non-empty
+          if [[ -n "$ip_address" && -n "$cidr_prefix" && -n "$default_gateway" ]]; then
+              echo "Configuring static network: $ip_address/$cidr_prefix via $default_gateway"
+              
+              # Function to safely escape YAML values
+              yaml_escape() {
+                  local value="$1"
+                  # If value contains special characters, quote it
+                  if [[ "$value" == *[\ \'\"\`\$\!\@\#\%\^\&\*\(\)\[\]\{\}\|\\\;\:\<\>\,\?\~]* ]]; then
+                      printf '"%s"' "${value//\"/\\\"}"
+                  else
+                      printf '%s' "$value"
+                  fi
+              }
+              
+              # Build netplan configuration programmatically to avoid templating issues
               netplan_config="/etc/netplan/01-netcfg.yaml"
-              cat > "$netplan_config" <<EOF
-      network:
-        version: 2
-        ethernets:
-          eth0:
-            dhcp4: no
-            addresses:
-              - $ip_address/$cidr_prefix
-            gateway4: $default_gateway
-            nameservers:
-              addresses:
-                - $dns1
-                - $dns2
-              search:
-                - $dns_suffix
-      EOF
-              netplan apply
-              echo "Network configured with netplan."
+              
+              # Start building the YAML structure
+              {
+                  echo "network:"
+                  echo "  version: 2"
+                  echo "  ethernets:"
+                  echo "    eth0:"
+                  echo "      dhcp4: no"
+                  echo "      addresses:"
+                  echo "        - $(yaml_escape "$ip_address/$cidr_prefix")"
+                  echo "      gateway4: $(yaml_escape "$default_gateway")"
+                  
+                  # Only add nameservers section if we have at least one DNS server
+                  if [[ -n "$dns1" || -n "$dns2" ]]; then
+                      echo "      nameservers:"
+                      
+                      # Add addresses array if we have DNS servers
+                      if [[ -n "$dns1" || -n "$dns2" ]]; then
+                          echo "        addresses:"
+                          [[ -n "$dns1" ]] && echo "          - $(yaml_escape "$dns1")"
+                          [[ -n "$dns2" ]] && echo "          - $(yaml_escape "$dns2")"
+                      fi
+                      
+                      # Add search domain if provided
+                      if [[ -n "$dns_suffix" ]]; then
+                          echo "        search:"
+                          echo "          - $(yaml_escape "$dns_suffix")"
+                      fi
+                  fi
+              } > "$netplan_config"
+              
+              # Validate the generated netplan configuration
+              if netplan generate 2>/dev/null; then
+                  netplan apply
+                  echo "Network configured with netplan successfully."
+              else
+                  echo "ERROR: Generated netplan configuration is invalid. Keeping DHCP configuration."
+                  rm -f "$netplan_config"
+              fi
+          else
+              echo "Network configuration incomplete or missing. Required: IP address, CIDR prefix, and default gateway."
+              echo "  IP Address: ${ip_address:-'<empty>'}"
+              echo "  CIDR Prefix: ${cidr_prefix:-'<empty>'}"
+              echo "  Default Gateway: ${default_gateway:-'<empty>'}"
+              echo "Skipping static network configuration - will use DHCP."
           fi
 
-          # Set the hostname if it is set
-          if [[ -f "$decrypted_keys_dir/guesthostname" ]]; then
-              hostname=$(cat "$decrypted_keys_dir/guesthostname")
+          # Set the hostname if it is provided and non-empty
+          hostname=$(read_file_safe "$decrypted_keys_dir/guesthostname" | tr -d '\0\r\n' | xargs)
+          if [[ -n "$hostname" ]]; then
               echo "$hostname" > /etc/hostname
               hostnamectl set-hostname "$hostname"
-              echo "Hostname set to $hostname."
+              echo "Hostname set to: $hostname"
+          else
+              echo "Hostname not provided or empty. Skipping hostname configuration."
           fi
           echo "Phase one completed."
           reboot
