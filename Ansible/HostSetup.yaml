@@ -1,0 +1,48 @@
+---
+- name: Install HLVMM scripts
+  hosts: hyperv_hosts
+  gather_facts: false
+  tasks:
+    - name: Ensure C:\Temp exists
+      win_file:
+        path: C:\Temp
+        state: directory
+        
+    - name: Download the PowerShell script
+      changed_when: false
+      win_get_url:
+        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/Scripts/InstallHostScripts.ps1?nocache={{ 9999999 | random }}
+        dest: C:\Temp\InstallHostScripts.ps1
+
+    - name: Update scripts
+      win_shell: powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostScripts.ps1
+      register: script_result
+      changed_when: "'Update complete.' in script_result.stdout"
+      failed_when:
+        - "'Update complete.' not in script_result.stdout"
+        - "'No update needed. Local version is up-to-date.' not in script_result.stdout"
+
+- name: Install HLVMM ISOs
+  hosts: hyperv_hosts
+  gather_facts: false
+  tasks:
+    - name: Download the PowerShell script
+      changed_when: false
+      win_get_url:
+        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/Scripts/InstallHostProvisioningISOs.ps1?nocache={{ 9999999 | random }}
+        dest: C:\Temp\InstallHostProvisioningISOs.ps1
+    
+    - name: Update ISOs
+      win_shell: |
+        powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostProvisioningISOs.ps1 `
+            -Region "us-west-1" `
+            -BucketName "hlvmm-provisioning-isos" `
+            -AccessKeyId "{{ lookup('env','AWS_ACCESS_KEY_ID') }}" `
+            -FolderPath "builds"
+      environment:
+        AWS_SECRET_ACCESS_KEY: "{{ lookup('env','AWS_SECRET_ACCESS_KEY') }}"
+      register: script_result
+      changed_when: "'Update complete.' in script_result.stdout"
+      failed_when:
+        - "'Update complete.' not in script_result.stdout"
+        - "'No update needed. Local version is up-to-date.' not in script_result.stdout"
