@@ -231,17 +231,27 @@ write_files:
 
           # Decrypt the AES key using the private key
           echo "Decrypting AES key using RSA private key..."
-          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt rsa_padding_mode:pkcs1)
-          if [[ -z "$decrypted_aes_key" ]]; then
+          
+          # Use temporary file to handle binary data properly (avoids null byte issues in command substitution)
+          temp_aes_key="/tmp/decrypted_aes_key"
+          if ! echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt rsa_padding_mode:pkcs1 > "$temp_aes_key"; then
               echo "ERROR: Failed to decrypt AES key"
+              rm -f "$temp_aes_key"
               return 1
           fi
           
-          echo "AES key decrypted successfully"
+          # Verify the decrypted key has the correct length (32 bytes for AES-256)
+          aes_key_size=$(stat -c%s "$temp_aes_key" 2>/dev/null || echo "0")
+          if [[ $aes_key_size -ne 32 ]]; then
+              echo "ERROR: Decrypted AES key has wrong size: $aes_key_size bytes (expected 32)"
+              rm -f "$temp_aes_key"
+              return 1
+          fi
+          
+          echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
           
           # Debug: Show AES key length for verification
-          aes_key_length=$(echo -n "$decrypted_aes_key" | wc -c)
-          echo "DEBUG: Decrypted AES key length: $aes_key_length bytes"
+          echo "DEBUG: Decrypted AES key length: $aes_key_size bytes"
 
           # Define the keys to decrypt (must match exactly with Windows PowerShell version)
           keys_to_decrypt=(
@@ -265,20 +275,20 @@ write_files:
           mkdir -p "$decrypted_keys_dir"
 
           # Convert decrypted AES key to hex format for OpenSSL
-          # The decrypted AES key should be raw bytes, not base64 encoded
-          aes_key_hex=$(echo -n "$decrypted_aes_key" | xxd -p | tr -d '\n')
+          # Read the binary AES key from file and convert to hex
+          aes_key_hex=$(xxd -p < "$temp_aes_key" | tr -d '\n')
           
           # Verify AES key length (should be 32 bytes = 64 hex characters for AES-256)
           if [[ ${#aes_key_hex} -ne 64 ]]; then
-              echo "WARNING: AES key length is ${#aes_key_hex} hex chars, expected 64. Trying base64 decode fallback..."
-              aes_key_hex=$(echo -n "$decrypted_aes_key" | base64 -d | xxd -p | tr -d '\n' 2>/dev/null)
-              if [[ ${#aes_key_hex} -ne 64 ]]; then
-                  echo "ERROR: AES key has invalid length after decryption: ${#aes_key_hex} hex chars (expected 64)"
-                  return 1
-              fi
+              echo "ERROR: AES key has invalid length after decryption: ${#aes_key_hex} hex chars (expected 64)"
+              rm -f "$temp_aes_key"
+              return 1
           fi
           
           echo "AES key successfully processed (${#aes_key_hex} hex characters)"
+          
+          # Clean up temporary AES key file
+          rm -f "$temp_aes_key"
 
           # Save each decrypted key to a file
           echo "Decrypting provisioning data keys..."
