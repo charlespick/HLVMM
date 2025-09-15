@@ -231,21 +231,9 @@ write_files:
 
           # Decrypt the AES key using the private key
           echo "Decrypting AES key using RSA private key..."
-          # Use pkeyutl with explicit PKCS#1 padding to match Windows .NET RSAEncryptionPadding.Pkcs1
-          # Try different padding parameter formats depending on OpenSSL version
-          if decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt rsa_padding_mode:pkcs1 2>/dev/null); then
-              echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
-          elif decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt pad:pkcs 2>/dev/null); then
-              echo "AES key decrypted successfully (pad:pkcs)"
-          elif decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" 2>/dev/null); then
-              echo "AES key decrypted successfully (default padding)"
-          else
-              echo "ERROR: Failed to decrypt AES key using pkeyutl with any supported padding method"
-              return 1
-          fi
-          
+          decrypted_aes_key=$(echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt rsa_padding_mode:pkcs1)
           if [[ -z "$decrypted_aes_key" ]]; then
-              echo "ERROR: AES key decryption resulted in empty output"
+              echo "ERROR: Failed to decrypt AES key"
               return 1
           fi
           
