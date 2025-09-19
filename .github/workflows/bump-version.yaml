@@ -3,7 +3,7 @@ name: Auto Increment Version
 on:
   push:
     branches:
-      - main
+      - devel
 
 permissions:
   contents: write

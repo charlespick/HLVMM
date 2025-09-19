@@ -12,8 +12,8 @@ param(
     [string]$FolderPath
 )
 
-$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager\isosversion"
-$installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager"
+$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\isosversion"
+$installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)"
 
 # Source AWS Secret Access Key from environment variable
 $AccessKeySecret = $env:AWS_SECRET_ACCESS_KEY
