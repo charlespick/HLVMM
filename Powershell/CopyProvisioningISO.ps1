@@ -8,7 +8,7 @@ param (
 )
 
 # Define static paths for provisioning ISOs
-$StaticCDPath = "C:\Program Files\Home Lab Virtual Machine Manager"
+$StaticCDPath = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)"
 
 $LinuxISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
 $WindowsISOPath = Join-Path -Path $StaticCDPath -ChildPath "WindowsProvisioning.iso"

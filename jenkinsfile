@@ -6,7 +6,7 @@ pipeline {
     parameters {
         string(name: 'AWS_REGION', defaultValue: 'us-west-1', description: 'AWS Region to use')
         string(name: 'S3_BUCKET', defaultValue: 'hlvmm-provisioning-isos', description: 'S3 bucket for uploads')
-        string(name: 'S3_PREFIX', defaultValue: 'builds', description: 'S3 path/prefix for artifacts')
+        string(name: 'S3_PREFIX', defaultValue: 'devel-builds', description: 'S3 path/prefix for artifacts')
     }
 
     environment {

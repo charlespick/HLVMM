@@ -1,8 +1,8 @@
 # Define variables
-$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager\scriptsversion"
-$repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/version"
-$repoPowershellApiUrl = "https://api.github.com/repos/charlespick/HLVMM/contents/Powershell"
-$installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager"
+$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\scriptsversion"
+$repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/devel/version"
+$repoPowershellApiUrl = "https://api.github.com/repos/charlespick/HLVMM/contents/Powershell?ref=devel"
+$installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)"
 
 # Function to compare versions
 function Compare-Version {
