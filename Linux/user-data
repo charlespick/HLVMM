@@ -423,14 +423,18 @@ write_files:
           # Verify the checksum of the provisioning data (calculated from all hlvmm.data values)
           echo "Verifying provisioning data checksum..."
           
-          # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
+          # Get all decrypted hlvmm.data values that have non-empty content (matching PowerShell behavior)
           declare -A data_values
           for key in "${hlvmm_data_keys[@]}"; do
               safe_filename=$(echo "$key" | sed 's/\./_/g')
-              data_values["$key"]="$(read_file_safe "$decrypted_keys_dir/$safe_filename")"
+              value="$(read_file_safe "$decrypted_keys_dir/$safe_filename" | tr -d '\0\r\n' | xargs)"
+              # Only include non-empty values in checksum (matching PowerShell side)
+              if [[ -n "$value" ]]; then
+                  data_values["$key"]="$value"
+              fi
           done
           
-          # Sort keys and concatenate values
+          # Sort keys and concatenate values (same as PowerShell side)
           concatenated_data=""
           for key in $(printf '%s\n' "${!data_values[@]}" | sort); do
               if [[ -n "$concatenated_data" ]]; then
@@ -443,6 +447,9 @@ write_files:
           # Calculate checksum and encode as Base64 (to match Windows version)
           calculated_checksum=$(echo -n "$concatenated_data" | sha256sum -b | awk '{print $1}' | xxd -r -p | base64 -w 0)          
           published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
+
+          echo "DEBUG: Keys included in checksum: $(printf '%s\n' "${!data_values[@]}" | sort | tr '\n' ' ')"
+          echo "DEBUG: Number of keys: ${#data_values[@]}"
 
           if [[ "$calculated_checksum" != "$published_checksum" ]]; then
               echo "ERROR: Checksum verification failed!"
