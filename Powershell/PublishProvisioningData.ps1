@@ -272,65 +272,6 @@ function Get-RsaFromGuestProvisioningKey {
     }
 }
 
-#region Provisioning Data Checksum Calculation and Publishing
-
-# Build array of keys to publish first
-$keysToPublish = @($PSBoundParameters.Keys)
-$keysToPublish += "GuestLaPw"
-
-if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
-    $keysToPublish += "GuestDomainJoinPw"
-}
-
-# Build sorted list of key-value pairs for all hlvmm.data keys that will be published
-$dataKeysForChecksum = @()
-
-foreach ($paramName in $keysToPublish) {
-    if ($paramName -eq "GuestLaPw") {
-        $paramValue = $GuestLaPw
-    }
-    elseif ($paramName -eq "GuestDomainJoinPw") {
-        $paramValue = $GuestDomainJoinPw
-    }
-    else {
-        $paramValue = $PSBoundParameters[$paramName]
-    }
-
-    # Convert parameter name to KVP key name using convention
-    $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
-    if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
-        $dataKeysForChecksum += @{ Key = $kvpKeyName; Value = $paramValue }
-    }
-}
-
-# Sort by key name to ensure consistent ordering
-$sortedDataKeys = $dataKeysForChecksum | Sort-Object Key
-
-# Concatenate all hlvmm.data values in sorted key order
-$provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
-
-# Compute a checksum of the concatenated data
-try {
-    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-        [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
-    )
-    $checksum = [Convert]::ToBase64String($hash)
-}
-catch {
-    throw "Failed to compute the checksum: $_"
-}
-
-# Publish the checksum to the KVP
-try {
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.provisioning_system_checksum" -Value $checksum
-    Write-Host "Successfully published checksum for provisioning data on VM '$GuestHostName'."
-}
-catch {
-    throw "Failed to publish the provisioning system checksum: $_"
-}
-
-#endregion
-
 #region AES Key Generation and Publishing
 
 # Generate a new AES key
@@ -377,16 +318,18 @@ catch {
 
 #endregion
 
-# Publish each defined parameter to the KVP as an encrypted value
+#region Publish Data Keys and Calculate Checksum
 
 # Build array of keys to publish
 $keysToPublish = @($PSBoundParameters.Keys)
-
 $keysToPublish += "GuestLaPw"
 
 if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
     $keysToPublish += "GuestDomainJoinPw"
 }
+
+# Track actually published keys for checksum calculation
+$publishedDataKeys = @()
 
 foreach ($paramName in $keysToPublish) {
     if ($paramName -eq "GuestLaPw") {
@@ -405,12 +348,44 @@ foreach ($paramName in $keysToPublish) {
         $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
         try {
             Publish-KvpEncryptedValue -VmName $GuestHostName -Key $kvpKeyName -Value $paramValue -AesKey $aesKey
+            # Track this key for checksum calculation
+            $publishedDataKeys += @{ Key = $kvpKeyName; Value = $paramValue }
+            Write-Host "Published encrypted value for key '$kvpKeyName'"
         }
         catch {
             Write-Host "Failed to publish encrypted value for parameter '$paramName' (key: '$kvpKeyName'): $_"
         }
     }
 }
+
+# Calculate checksum based on actually published keys
+$sortedDataKeys = $publishedDataKeys | Sort-Object Key
+$provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
+
+Write-Host "Checksum calculation - Keys published: $($publishedDataKeys.Count)"
+Write-Host "Checksum calculation - Key names: $(($sortedDataKeys | ForEach-Object { $_.Key }) -join ', ')"
+
+# Compute a checksum of the concatenated data
+try {
+    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
+    )
+    $checksum = [Convert]::ToBase64String($hash)
+}
+catch {
+    throw "Failed to compute the checksum: $_"
+}
+
+# Publish the checksum to the KVP
+try {
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.provisioning_system_checksum" -Value $checksum
+    Write-Host "Successfully published checksum for provisioning data on VM '$GuestHostName'."
+}
+catch {
+    throw "Failed to publish the provisioning system checksum: $_"
+}
+
+#endregion
 
 # Publish the host provisioning system state to the KVP
 try {

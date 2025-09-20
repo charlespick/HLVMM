@@ -427,10 +427,19 @@ write_files:
           declare -A data_values
           for key in "${hlvmm_data_keys[@]}"; do
               safe_filename=$(echo "$key" | sed 's/\./_/g')
-              value="$(read_file_safe "$decrypted_keys_dir/$safe_filename" | tr -d '\0\r\n' | xargs)"
-              # Only include non-empty values in checksum (matching PowerShell side)
-              if [[ -n "$value" ]]; then
-                  data_values["$key"]="$value"
+              # Read file content and normalize it exactly like PowerShell would
+              if [[ -f "$decrypted_keys_dir/$safe_filename" ]]; then
+                  # Read the raw content and normalize exactly like .NET's UTF8 string handling
+                  value=$(cat "$decrypted_keys_dir/$safe_filename" | tr -d '\0\r' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+                  # Only include non-empty values in checksum (matching PowerShell side)
+                  if [[ -n "$value" ]]; then
+                      data_values["$key"]="$value"
+                      echo "DEBUG: Including key '$key' with value length ${#value}"
+                  else
+                      echo "DEBUG: Skipping empty key '$key'"
+                  fi
+              else
+                  echo "DEBUG: File not found for key '$key' (filename: $safe_filename)"
               fi
           done
           
@@ -450,6 +459,8 @@ write_files:
 
           echo "DEBUG: Keys included in checksum: $(printf '%s\n' "${!data_values[@]}" | sort | tr '\n' ' ')"
           echo "DEBUG: Number of keys: ${#data_values[@]}"
+          echo "DEBUG: Concatenated data: '$concatenated_data'"
+          echo "DEBUG: Concatenated data length: ${#concatenated_data} characters"
 
           if [[ "$calculated_checksum" != "$published_checksum" ]]; then
               echo "ERROR: Checksum verification failed!"
