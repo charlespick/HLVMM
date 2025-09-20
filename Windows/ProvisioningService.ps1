@@ -243,7 +243,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $dataKeys = Get-HlvmmDataKeys -AesKey $unwrappedAesKey
         
         # Sort keys by name for consistent ordering and concatenate values
-        $sortedDataKeys = $dataKeys | Sort-Object Key
+        $sortedDataKeys = $dataKeys | Sort-Object { $_.Key }
         $concatenatedData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
 
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
