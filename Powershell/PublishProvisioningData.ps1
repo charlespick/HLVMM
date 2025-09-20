@@ -288,7 +288,7 @@ $provisioningDataItems = @(
     @{ ParamName = "GuestNetDnsSuffix"; KvpKey = "hlvmm.data.guest_net_dns_suffix"; Value = $GuestNetDnsSuffix }
     @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
     @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
-    @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_o_u"; Value = $GuestDomainJoinOU }
+    @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_ou"; Value = $GuestDomainJoinOU }
     @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
     @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
     @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }
