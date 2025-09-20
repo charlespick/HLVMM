@@ -18,8 +18,8 @@
 
     - name: Set default domain credentials if specified
       set_fact:
-        guest_domain_joinuid: "{{ default_guest_domain_joinuid }}"
-        guest_domain_joinpw: "{{ default_guest_domain_joinpw }}"
+        guest_domain_joinuid: "{{ lookup('env', 'default_guest_domain_joinuid') }}"
+        guest_domain_joinpw: "{{ lookup('env', 'default_guest_domain_joinpw') }}"
         guest_domain_jointarget: "{{ default_guest_domain_jointarget }}"
       when: use_default_domain_credentials is defined and use_default_domain_credentials == "Yes"
 
