@@ -1,0 +1,2 @@
+namespace        pool        key         purpose
+hlvmm.meta       host        version     used to verify guest agent version matches host scripts

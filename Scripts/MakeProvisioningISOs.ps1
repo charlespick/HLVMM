@@ -8,11 +8,14 @@ if (-Not (Test-Path -Path $isoOutputFolder)) {
 }
 
 $windowsFolder = Join-Path -Path $repoRoot -ChildPath "Windows"
-$winIsoOutputPath = Join-Path -Path $isoOutputFolder -ChildPath "WindowsProvisioning.iso"
+$linuxFolder = Join-Path -Path $repoRoot -ChildPath "Linux"
+$versionFile = Join-Path -Path $repoRoot -ChildPath "version"
 
+Copy-Item -Path $versionFile -Destination $windowsFolder -Force
+Copy-Item -Path $versionFile -Destination $linuxFolder -Force
+
+$winIsoOutputPath = Join-Path -Path $isoOutputFolder -ChildPath "WindowsProvisioning.iso"
 & $oscdimgPath -m -o -u2 -udfver102 "$windowsFolder" "$winIsoOutputPath"
 
-$linuxFolder = Join-Path -Path $repoRoot -ChildPath "Linux"
 $linuxIsoOutputPath = Join-Path -Path $isoOutputFolder -ChildPath "LinuxProvisioning.iso"
-
 & $oscdimgPath -m -o -lCIDATA -n -d "$linuxFolder" "$linuxIsoOutputPath"

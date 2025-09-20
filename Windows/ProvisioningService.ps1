@@ -104,11 +104,39 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             Start-Sleep -Seconds 5
         }
 
-        $manifest = Read-HyperVKvp -Key "provisioningsystemmanifest" -ErrorAction SilentlyContinue
-        if ($manifest -ne "provisioningsystemver1") {
-            Write-Host "Provisioning system manifest mismatch. Terminating program."
+        # Read expected version from local version file
+        $versionFilePath = "C:\ProgramData\HyperV\version"
+        if (-not (Test-Path $versionFilePath)) {
+            Write-Host "Version file not found at $versionFilePath. Cannot verify provisioning system version."
             exit
         }
+        $expectedVersionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction SilentlyContinue
+        if (-not $expectedVersionRaw) {
+            Write-Host "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
+            exit
+        }
+        
+        # Normalize expected version: trim whitespace, remove null chars, convert to string
+        $expectedVersion = [string]($expectedVersionRaw -replace "`0", "").Trim()
+        if (-not $expectedVersion) {
+            Write-Host "Version file contains empty or invalid content. Cannot verify provisioning system version."
+            exit
+        }
+
+        $manifestRaw = Read-HyperVKvp -Key "hlvmm.meta.version" -ErrorAction SilentlyContinue
+        if (-not $manifestRaw) {
+            Write-Host "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
+            exit
+        }
+        
+        # Normalize manifest version: trim whitespace, remove null chars, convert to string
+        $manifest = [string]($manifestRaw -replace "`0", "").Trim()
+        
+        if ($manifest -ne $expectedVersion) {
+            Write-Host "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'. Terminating program."
+            exit
+        }
+        Write-Host "Provisioning system version verified: $expectedVersion"
 
         # Generate RSA key pair and keep them in memory
         $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)

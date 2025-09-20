@@ -115,7 +115,13 @@ function Get-VMKeyValuePair {
 # Set the KVP HostProvisioningSystemState to "Waitingforpublickey"
 Write-Host "Setting up provisioning KVP values for VM '$VMName'..."
 Set-VMKeyValuePair -VMName $VMName -Name "hostprovisioningsystemstate" -Value "waitingforpublickey"
-Set-VMKeyValuePair -VMName $VMName -Name "provisioningsystemmanifest" -Value "provisioningsystemver1"
+$scriptsVersionPath = Join-Path -Path $PSScriptRoot -ChildPath "scriptsversion"
+if (Test-Path $scriptsVersionPath) {
+    $scriptsVersion = Get-Content $scriptsVersionPath -Raw
+} else {
+    $scriptsVersion = "unknown"
+}
+Set-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.version" -Value $scriptsVersion
 
 # Initialize timeout variables
 $timeout = 600 # 10 minutes in seconds

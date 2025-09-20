@@ -12,6 +12,15 @@ if (-not (Test-Path $TargetPath)) {
 Copy-Item -Path "$CDROMPath\$ScriptName" -Destination "$TargetPath\$ScriptName" -Force
 Unblock-File -Path "$TargetPath\$ScriptName"
 
+# Copy version file for version verification
+$VersionFile = "version"
+if (Test-Path "$CDROMPath\$VersionFile") {
+    Copy-Item -Path "$CDROMPath\$VersionFile" -Destination "$TargetPath\$VersionFile" -Force
+    Write-Host "Copied version file to $TargetPath\$VersionFile"
+} else {
+    Write-Host "Warning: Version file not found at $CDROMPath\$VersionFile"
+}
+
 Write-Host "Creating scheduled task $TaskName..."
 
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$TargetPath\$ScriptName`""
