@@ -12,7 +12,7 @@
           {%- elif image_name | ansible.builtin.regex_search('^(Ubuntu|Red Hat Enterprise Linux|RHEL|CentOS|Rocky Linux|AlmaLinux|Oracle Linux|Debian|SUSE|openSUSE|Fedora).*', ignorecase=True) -%}
           linux
           {%- else -%}
-          {{ 'Unsupported OS detected in image_name: ' ~ image_name ~ '. Supported OS families: Windows*, Microsoft Windows*, Ubuntu*, Red Hat Enterprise Linux*, RHEL*, CentOS*, Rocky Linux*, AlmaLinux*, Oracle Linux*, Debian*, SUSE*, openSUSE*, Fedora*' | fail }}
+          {{ fail('Unsupported OS detected in image_name: ' + image_name + '. Supported OS families: Windows*, Microsoft Windows*, Ubuntu*, Red Hat Enterprise Linux*, RHEL*, CentOS*, Rocky Linux*, AlmaLinux*, Oracle Linux*, Debian*, SUSE*, openSUSE*, Fedora*') }}
           {%- endif -%}
 
 
