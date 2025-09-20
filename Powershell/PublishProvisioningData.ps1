@@ -274,18 +274,13 @@ function Get-RsaFromGuestProvisioningKey {
 
 #region Provisioning Data Checksum Calculation and Publishing
 
-Write-Host "=== CHECKSUM CALCULATION DEBUG ==="
-
 # Build array of keys to publish first
 $keysToPublish = @($PSBoundParameters.Keys)
 $keysToPublish += "GuestLaPw"
 
 if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
     $keysToPublish += "GuestDomainJoinPw"
-    Write-Host "DEBUG: Added GuestDomainJoinPw to keys to publish"
 }
-
-Write-Host "DEBUG: Initial keys to publish: $($keysToPublish -join ', ')"
 
 # Build sorted list of key-value pairs for all hlvmm.data keys that will be published
 $dataKeysForChecksum = @()
@@ -304,53 +299,28 @@ foreach ($paramName in $keysToPublish) {
     # Convert parameter name to KVP key name using convention
     $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
     
-    Write-Host "DEBUG: Parameter '$paramName' -> KVP key '$kvpKeyName'"
-    Write-Host "DEBUG:   Value length: $(if ($paramValue) { $paramValue.Length } else { 0 }) chars"
-    Write-Host "DEBUG:   Value preview: '$(if ($paramValue) { $paramValue.Substring(0, [Math]::Min(20, $paramValue.Length)) } else { '<empty>' })$(if ($paramValue -and $paramValue.Length -gt 20) { '...' })'"
-    
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         $dataKeysForChecksum += @{ Key = $kvpKeyName; Value = $paramValue }
-        Write-Host "DEBUG:   -> INCLUDED in checksum"
-    } else {
-        Write-Host "DEBUG:   -> EXCLUDED from checksum (null/empty/whitespace)"
     }
 }
 
-# Debug: Show keys before sorting
-Write-Host "DEBUG: Keys before sorting:"
+# Sort by key name to ensure consistent ordering
+# NOTE: Sort-Object Key on hashtables has a bug - we extract keys, sort them, then rebuild
+$keyDict = @{}
 foreach ($item in $dataKeysForChecksum) {
-    Write-Host "DEBUG:   Unsorted Key: '$($item.Key)'"
+    $keyDict[$item.Key] = $item.Value
 }
-
-# Sort by key name to ensure consistent ordering (using culture-invariant sort)
-$sortedDataKeys = $dataKeysForChecksum | Sort-Object Key -Culture ([System.Globalization.CultureInfo]::InvariantCulture)
-
-Write-Host "DEBUG: Keys included in checksum calculation (sorted):"
-$keyOrder = @()
-foreach ($item in $sortedDataKeys) {
-    Write-Host "DEBUG:   Key: '$($item.Key)' -> Value length: $($item.Value.Length) chars"
-    $keyOrder += $item.Key
-}
-Write-Host "DEBUG: Final PowerShell key order for checksum: $($keyOrder -join '|')"
+$sortedKeys = $keyDict.Keys | Sort-Object
+$sortedDataKeys = $sortedKeys | ForEach-Object { @{ Key = $_; Value = $keyDict[$_] } }
 
 # Concatenate all hlvmm.data values in sorted key order
 $provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
 
-Write-Host "DEBUG: Concatenated data for checksum:"
-Write-Host "DEBUG:   Length: $($provisioningData.Length) chars"
-Write-Host "DEBUG:   Content: '$($provisioningData.Substring(0, [Math]::Min(200, $provisioningData.Length)))$(if ($provisioningData.Length -gt 200) { '...' })'"
-
 # Compute a checksum of the concatenated data
 try {
     $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
-    Write-Host "DEBUG: UTF-8 byte array length: $($utf8Bytes.Length) bytes"
-    Write-Host "DEBUG: First 20 bytes (hex): $(($utf8Bytes[0..([Math]::Min(19, $utf8Bytes.Length-1))] | ForEach-Object { $_.ToString('X2') }) -join ' ')"
-    
     $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($utf8Bytes)
     $checksum = [Convert]::ToBase64String($hash)
-    
-    Write-Host "DEBUG: SHA256 hash (hex): $(($hash | ForEach-Object { $_.ToString('X2') }) -join '')"
-    Write-Host "DEBUG: Checksum (Base64): $checksum"
 }
 catch {
     throw "Failed to compute the checksum: $_"
