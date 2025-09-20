@@ -51,8 +51,8 @@
 
     - name: Set default Ansible credentials if specified
       set_fact:
-        ansible_ssh_user: "{{ default_ansible_ssh_user }}"
-        ansible_ssh_key: "{{ default_ansible_ssh_key }}"
+        cnf_ansible_ssh_user: "{{ default_cnf_ansible_ssh_user }}"
+        cnf_ansible_ssh_key: "{{ default_cnf_ansible_ssh_key }}"
       when: use_default_ansible_creds is defined and use_default_ansible_creds == "Yes"
 
     - name: Clear Ansible SSH credentials for Windows systems
@@ -61,14 +61,14 @@
           debug:
             msg: "WARNING: Ansible SSH credentials are not supported for Windows systems. Clearing all Ansible SSH variables."
           when: >
-            (ansible_ssh_user is defined and ansible_ssh_user|length > 0) or
-            (ansible_ssh_key is defined and ansible_ssh_key|length > 0) or
+            (cnf_ansible_ssh_user is defined and cnf_ansible_ssh_user|length > 0) or
+            (cnf_ansible_ssh_key is defined and cnf_ansible_ssh_key|length > 0) or
             (use_default_ansible_creds is defined and use_default_ansible_creds == "Yes")
 
         - name: Clear Ansible SSH variables
           set_fact:
-            ansible_ssh_user: ""
-            ansible_ssh_key: ""
+            cnf_ansible_ssh_user: ""
+            cnf_ansible_ssh_key: ""
       when: os_family == "windows"
 
     - name: Copy Image
@@ -112,8 +112,8 @@
         {% if guest_domain_jointarget is defined and guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ guest_domain_jointarget }}{% endif %}
         {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
         {% if guest_domain_joinou is defined and guest_domain_joinou|length > 0 %}-GuestDomainJoinOU {{ guest_domain_joinou }}{% endif %}
-        {% if ansible_ssh_user is defined and ansible_ssh_user|length > 0 %}-AnsibleSshUser {{ ansible_ssh_user }}{% endif %}
-        {% if ansible_ssh_key is defined and ansible_ssh_key|length > 0 %}-AnsibleSshKey {{ ansible_ssh_key }}{% endif %}
+        {% if cnf_ansible_ssh_user is defined and cnf_ansible_ssh_user|length > 0 %}-AnsibleSshUser {{ cnf_ansible_ssh_user }}{% endif %}
+        {% if cnf_ansible_ssh_key is defined and cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey {{ cnf_ansible_ssh_key }}{% endif %}
       environment:
         GuestLaPw: "{{ guest_la_pw }}"
         GuestDomainJoinPw: "{{ guest_domain_joinpw | default('') }}"
