@@ -7,9 +7,9 @@
     - name: Determine OS Family from Image Name
       set_fact:
         os_family: >-
-          {%- if image_name | regex_match('^(Windows|Microsoft Windows).*', ignorecase=true) -%}
+          {%- if image_name | match('^(Windows|Microsoft Windows).*', ignorecase=true) -%}
           windows
-          {%- elif image_name | regex_match('^(Ubuntu|Red Hat Enterprise Linux|RHEL|CentOS|Rocky Linux|AlmaLinux|Oracle Linux|Debian|SUSE|openSUSE|Fedora).*', ignorecase=true) -%}
+          {%- elif image_name | match('^(Ubuntu|Red Hat Enterprise Linux|RHEL|CentOS|Rocky Linux|AlmaLinux|Oracle Linux|Debian|SUSE|openSUSE|Fedora).*', ignorecase=true) -%}
           linux
           {%- else -%}
           {{ fail('Unsupported OS detected in image_name: ' + image_name + '. Supported OS families: Windows*, Microsoft Windows*, Ubuntu*, Red Hat Enterprise Linux*, RHEL*, CentOS*, Rocky Linux*, AlmaLinux*, Oracle Linux*, Debian*, SUSE*, openSUSE*, Fedora*') }}
