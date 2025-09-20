@@ -16,18 +16,6 @@
           {%- endif -%}
 
 
-    - name: Set default domain credentials if specified
-      set_fact:
-        guest_domain_joinuid: "{{ lookup('env', 'default_guest_domain_joinuid') }}"
-        guest_domain_joinpw: "{{ lookup('env', 'default_guest_domain_joinpw') }}"
-        guest_domain_jointarget: "{{ default_guest_domain_jointarget }}"
-      when: use_default_domain_credentials is defined and use_default_domain_credentials == "Yes"
-
-    - name: Set default domain OU if specified
-      set_fact:
-        guest_domain_joinou: "{{ default_guest_domain_joinou }}"
-      when: use_default_domain_ou is defined and use_default_domain_ou == "Yes"
-
     - name: Resolve effective domain join variables
       set_fact:
         effective_guest_domain_joinuid: >-
@@ -94,12 +82,6 @@
             effective_guest_domain_jointarget: ""
             effective_guest_domain_joinou: ""
       when: os_family == "linux"
-
-    - name: Set default Ansible credentials if specified
-      set_fact:
-        cnf_ansible_ssh_user: "{{ default_cnf_ansible_ssh_user }}"
-        cnf_ansible_ssh_key: "{{ default_cnf_ansible_ssh_key }}"
-      when: use_default_ansible_creds is defined and use_default_ansible_creds == "Yes"
 
     - name: Clear Ansible SSH credentials for Windows systems
       block:
