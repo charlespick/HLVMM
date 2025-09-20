@@ -316,13 +316,22 @@ foreach ($paramName in $keysToPublish) {
     }
 }
 
-# Sort by key name to ensure consistent ordering
-$sortedDataKeys = $dataKeysForChecksum | Sort-Object Key
+# Debug: Show keys before sorting
+Write-Host "DEBUG: Keys before sorting:"
+foreach ($item in $dataKeysForChecksum) {
+    Write-Host "DEBUG:   Unsorted Key: '$($item.Key)'"
+}
+
+# Sort by key name to ensure consistent ordering (using culture-invariant sort)
+$sortedDataKeys = $dataKeysForChecksum | Sort-Object Key -Culture ([System.Globalization.CultureInfo]::InvariantCulture)
 
 Write-Host "DEBUG: Keys included in checksum calculation (sorted):"
+$keyOrder = @()
 foreach ($item in $sortedDataKeys) {
     Write-Host "DEBUG:   Key: '$($item.Key)' -> Value length: $($item.Value.Length) chars"
+    $keyOrder += $item.Key
 }
+Write-Host "DEBUG: Final PowerShell key order for checksum: $($keyOrder -join '|')"
 
 # Concatenate all hlvmm.data values in sorted key order
 $provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
