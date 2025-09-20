@@ -8,6 +8,8 @@ param (
     [string]$GuestDomainJoinTarget,
     [string]$GuestDomainJoinUid,
     [string]$GuestDomainJoinOU,
+    [string]$AnsibleSshUser,
+    [string]$AnsibleSshKey,
 
     [Parameter(Mandatory = $true)]
     [string]$GuestLaUid,
@@ -25,9 +27,9 @@ if (-not $GuestLaPw) {
 $GuestDomainJoinPw = $env:GuestDomainJoinPw
 
 # Validate IP settings if any IP-related parameter is provided
-if ($GuestV4IpAddr -or $GuestV4CidrPrefix -or $GuestV4DefaultGw -or $GuestV4Dns1 -or $GuestV4Dns2 -or $GuestNetDnsSuffix) {
-    if (-not $GuestV4IpAddr -or -not $GuestV4CidrPrefix -or -not $GuestV4DefaultGw -or -not $GuestV4Dns1 -or -not $GuestV4Dns2 -or -not $GuestNetDnsSuffix) {
-        throw "All IP settings (GuestV4IpAddr, GuestV4CidrPrefix, GuestV4DefaultGw, GuestV4Dns1, GuestV4Dns2, GuestNetDnsSuffix) must be provided if any IP setting is specified."
+if ($GuestV4IpAddr -or $GuestV4CidrPrefix -or $GuestV4DefaultGw -or $GuestV4Dns1 -or $GuestV4Dns2) {
+    if (-not $GuestV4IpAddr -or -not $GuestV4CidrPrefix -or -not $GuestV4DefaultGw -or -not $GuestV4Dns1 -or -not $GuestV4Dns2) {
+        throw "All IP settings (GuestV4IpAddr, GuestV4CidrPrefix, GuestV4DefaultGw, GuestV4Dns1, GuestV4Dns2) must be provided if any IP setting is specified."
     }
 }
 
@@ -286,7 +288,7 @@ $provisioningDataItems = @(
     @{ ParamName = "GuestNetDnsSuffix"; KvpKey = "hlvmm.data.guest_net_dns_suffix"; Value = $GuestNetDnsSuffix }
     @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
     @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
-    @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_o_u"; Value = $GuestDomainJoinOU }
+    @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_ou"; Value = $GuestDomainJoinOU }
     @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
     @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
     @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }
