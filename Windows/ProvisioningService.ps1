@@ -70,6 +70,42 @@ function Decrypt-AesCbcWithPrependedIV {
     }
 }
 
+function Get-HlvmmDataKeys {
+    # Get all KVP keys from registry that start with "hlvmm.data." and decrypt their values
+    param(
+        [Parameter(Mandatory)]
+        [string]$AesKey
+    )
+    
+    $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
+    $allKeys = @()
+    
+    try {
+        $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
+        if ($regItem) {
+            $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" } | ForEach-Object {
+                $keyName = $_
+                $keyValue = (Get-ItemProperty -Path $regPath -Name $keyName).$keyName
+                if ($keyValue) {
+                    try {
+                        # Decrypt the value
+                        $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $AesKey -CiphertextBase64 $keyValue -Output Utf8
+                        $allKeys += @{ Key = $keyName; Value = $decryptedValue }
+                    }
+                    catch {
+                        Write-Host "Failed to decrypt key $keyName : $_"
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "Error reading hlvmm.data keys from registry: $_"
+    }
+    
+    return $allKeys
+}
+
 if (-not (Test-Path $PhaseFile)) {
     "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
 }
@@ -97,7 +133,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
             if ($state -eq "waitingforpublickey") {
                 break
             }
@@ -144,20 +180,20 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         # Convert public key to Base64 and write it to the KVP
         $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
-        Write-HyperVKvp -Key "guestprovisioningpublickey" -Value $publicKeyBase64
+        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
 
-        Write-HyperVKvp -Key "guestprovisioningsystemstate" -Value "waitingforaeskey"
+        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value "waitingforaeskey"
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
             if ($state -eq "provisioningdatapublished") {
                 break
             }
             Start-Sleep -Seconds 5
         }
 
-        # Read the shared AES key from "sharedaeskey"
-        $sharedAesKeyBase64 = Read-HyperVKvp -Key "sharedaeskey" -ErrorAction SilentlyContinue
+        # Read the shared AES key from "hlvmm.meta.shared_aes_key"
+        $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
         if (-not $sharedAesKeyBase64) {
             Write-Host "Failed to retrieve shared AES key. Terminating program."
             exit
@@ -166,22 +202,39 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
         $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
 
-        # Define the keys to decrypt
+        # Define the keys to decrypt with new standardized names
         $keysToDecrypt = @(
-            "guesthostname",
-            "guestv4ipaddr",
-            "guestv4cidrprefix",
-            "guestv4defaultgw",
-            "guestv4dns1",
-            "guestv4dns2",
-            "guestnetdnssuffix",
-            "guestdomainjointarget",
-            "guestdomainjoinuid",
-            "guestdomainjoinpw",
-            "guestdomainjoinou",
-            "guestlauid",
-            "guestlapw"
+            "hlvmm.data.guest_host_name",
+            "hlvmm.data.guest_v4_ip_addr",
+            "hlvmm.data.guest_v4_cidr_prefix",
+            "hlvmm.data.guest_v4_default_gw",
+            "hlvmm.data.guest_v4_dns1",
+            "hlvmm.data.guest_v4_dns2",
+            "hlvmm.data.guest_net_dns_suffix",
+            "hlvmm.data.guest_domain_join_target",
+            "hlvmm.data.guest_domain_join_uid",
+            "hlvmm.data.guest_domain_join_pw",
+            "hlvmm.data.guest_domain_join_ou",
+            "hlvmm.data.guest_la_uid",
+            "hlvmm.data.guest_la_pw"
         )
+
+        # Create mapping from new KVP key names to legacy filenames for backward compatibility
+        $keyToFilenameMapping = @{
+            "hlvmm.data.guest_host_name"         = "guesthostname"
+            "hlvmm.data.guest_v4_ip_addr"        = "guestv4ipaddr"
+            "hlvmm.data.guest_v4_cidr_prefix"    = "guestv4cidrprefix"
+            "hlvmm.data.guest_v4_default_gw"     = "guestv4defaultgw"
+            "hlvmm.data.guest_v4_dns1"           = "guestv4dns1"
+            "hlvmm.data.guest_v4_dns2"           = "guestv4dns2"
+            "hlvmm.data.guest_net_dns_suffix"    = "guestnetdnssuffix"
+            "hlvmm.data.guest_domain_join_target" = "guestdomainjointarget"
+            "hlvmm.data.guest_domain_join_uid"   = "guestdomainjoinuid"
+            "hlvmm.data.guest_domain_join_pw"    = "guestdomainjoinpw"
+            "hlvmm.data.guest_domain_join_ou"    = "guestdomainjoinou"
+            "hlvmm.data.guest_la_uid"            = "guestlauid"
+            "hlvmm.data.guest_la_pw"             = "guestlapw"
+        }
 
         # Decrypt and process each key
         foreach ($key in $keysToDecrypt) {
@@ -191,24 +244,22 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 continue
             }
             $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $unwrappedAesKey -CiphertextBase64 $encryptedValueBase64 -Output Utf8
-            $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$key.txt")
+            $legacyFilename = $keyToFilenameMapping[$key]
+            $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$legacyFilename.txt")
             [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
         }
 
-        $concatenatedData = ($keysToDecrypt | ForEach-Object {
-                $filePath = Join-Path -Path $decryptedKeysDir -ChildPath "$_.txt"
-                if (Test-Path $filePath) {
-                    Get-Content -Path $filePath
-                }
-                else {
-                    ""
-                }
-            }) -join "|"
+        # Get all hlvmm.data keys and their decrypted values for checksum verification
+        $dataKeys = Get-HlvmmDataKeys -AesKey $unwrappedAesKey
+        
+        # Sort keys by name for consistent ordering and concatenate values
+        $sortedDataKeys = $dataKeys | Sort-Object Key
+        $concatenatedData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
 
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
         $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
 
-        $provisioningSystemChecksum = Read-HyperVKvp -Key "provisioningsystemchecksum" -ErrorAction SilentlyContinue
+        $provisioningSystemChecksum = Read-HyperVKvp -Key "hlvmm.meta.provisioning_system_checksum" -ErrorAction SilentlyContinue
 
         $computedHashBase64 = [Convert]::ToBase64String($computedHash)
         if ($computedHashBase64 -ne $provisioningSystemChecksum) {

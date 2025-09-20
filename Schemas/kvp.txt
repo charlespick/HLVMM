@@ -1,2 +1,21 @@
-namespace        pool        key         purpose
-hlvmm.meta       host        version     used to verify guest agent version matches host scripts
+namespace        pool        key                                     purpose
+hlvmm.meta       host        version                                 used to verify guest agent version matches host scripts
+hlvmm.meta       host        host_provisioning_system_state        state of host provisioning system (waitingforpublickey, provisioningdatapublished)
+hlvmm.meta       guest       guest_provisioning_system_state       state of guest provisioning system (waitingforaeskey)
+hlvmm.meta       host        shared_aes_key                         wrapped AES key for encrypting provisioning data
+hlvmm.meta       guest       guest_provisioning_public_key         RSA public key from guest for key wrapping
+hlvmm.meta       host        provisioning_system_checksum          SHA256 checksum of all hlvmm.data keys
+
+hlvmm.data       host        guest_host_name                        hostname to set on guest
+hlvmm.data       host        guest_v4_ip_addr                       IPv4 address for guest
+hlvmm.data       host        guest_v4_cidr_prefix                   CIDR prefix for guest IP
+hlvmm.data       host        guest_v4_default_gw                    default gateway for guest
+hlvmm.data       host        guest_v4_dns1                          primary DNS server for guest
+hlvmm.data       host        guest_v4_dns2                          secondary DNS server for guest
+hlvmm.data       host        guest_net_dns_suffix                   DNS suffix for guest network
+hlvmm.data       host        guest_domain_join_target               domain to join guest to
+hlvmm.data       host        guest_domain_join_uid                  username for domain join
+hlvmm.data       host        guest_domain_join_pw                   password for domain join
+hlvmm.data       host        guest_domain_join_ou                   organizational unit for domain join
+hlvmm.data       host        guest_la_uid                           local administrator username
+hlvmm.data       host        guest_la_pw                            local administrator password
