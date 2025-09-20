@@ -8,6 +8,8 @@ param (
     [string]$GuestDomainJoinTarget,
     [string]$GuestDomainJoinUid,
     [string]$GuestDomainJoinOU,
+    [string]$AnsibleSshUser,
+    [string]$AnsibleSshKey,
 
     [Parameter(Mandatory = $true)]
     [string]$GuestLaUid,
