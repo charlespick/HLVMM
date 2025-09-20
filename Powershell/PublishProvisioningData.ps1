@@ -274,41 +274,30 @@ function Get-RsaFromGuestProvisioningKey {
 
 #region Provisioning Data Checksum Calculation and Publishing
 
-# Build array of keys to publish first
-$keysToPublish = @($PSBoundParameters.Keys)
-$keysToPublish += "GuestLaPw"
+# Define all possible provisioning data values with their KVP key names
+$provisioningDataItems = @(
+    @{ ParamName = "GuestV4IpAddr"; KvpKey = "hlvmm.data.guest_v4_ip_addr"; Value = $GuestV4IpAddr }
+    @{ ParamName = "GuestV4CidrPrefix"; KvpKey = "hlvmm.data.guest_v4_cidr_prefix"; Value = $GuestV4CidrPrefix }
+    @{ ParamName = "GuestV4DefaultGw"; KvpKey = "hlvmm.data.guest_v4_default_gw"; Value = $GuestV4DefaultGw }
+    @{ ParamName = "GuestV4Dns1"; KvpKey = "hlvmm.data.guest_v4_dns1"; Value = $GuestV4Dns1 }
+    @{ ParamName = "GuestV4Dns2"; KvpKey = "hlvmm.data.guest_v4_dns2"; Value = $GuestV4Dns2 }
+    @{ ParamName = "GuestNetDnsSuffix"; KvpKey = "hlvmm.data.guest_net_dns_suffix"; Value = $GuestNetDnsSuffix }
+    @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
+    @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
+    @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_o_u"; Value = $GuestDomainJoinOU }
+    @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
+    @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
+    @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }
+    @{ ParamName = "GuestDomainJoinPw"; KvpKey = "hlvmm.data.guest_domain_join_pw"; Value = $GuestDomainJoinPw }
+)
 
-if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
-    $keysToPublish += "GuestDomainJoinPw"
-}
+# Filter to only items with non-empty values, then sort by KVP key for consistent checksum
+$dataKeysForChecksum = $provisioningDataItems | 
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) } | 
+    Sort-Object { $_.KvpKey }
 
-# Build sorted list of key-value pairs for all hlvmm.data keys that will be published
-$dataKeysForChecksum = @()
-
-foreach ($paramName in $keysToPublish) {
-    if ($paramName -eq "GuestLaPw") {
-        $paramValue = $GuestLaPw
-    }
-    elseif ($paramName -eq "GuestDomainJoinPw") {
-        $paramValue = $GuestDomainJoinPw
-    }
-    else {
-        $paramValue = $PSBoundParameters[$paramName]
-    }
-
-    # Convert parameter name to KVP key name using convention
-    $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
-    
-    if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
-        $dataKeysForChecksum += @{ Key = $kvpKeyName; Value = $paramValue }
-    }
-}
-
-# Sort by key name to ensure consistent ordering
-$sortedDataKeys = $dataKeysForChecksum | Sort-Object { $_.Key }
-
-# Concatenate all hlvmm.data values in sorted key order
-$provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
+# Concatenate all values in sorted key order for checksum calculation
+$provisioningData = ($dataKeysForChecksum | ForEach-Object { $_.Value }) -join "|"
 
 # Compute a checksum of the concatenated data
 try {
@@ -381,41 +370,17 @@ catch {
 
 Write-Host "=== PUBLISHING KVP VALUES ==="
 
-# Build array of keys to publish (must match checksum calculation exactly)
-$keysToPublish = @($PSBoundParameters.Keys)
-$keysToPublish += "GuestLaPw"
-
-if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
-    $keysToPublish += "GuestDomainJoinPw"
-}
-
+$keysToPublish = $dataKeysForChecksum | ForEach-Object { $_.ParamName }
 Write-Host "DEBUG: Publishing keys: $($keysToPublish -join ', ')"
 
-foreach ($paramName in $keysToPublish) {
-    if ($paramName -eq "GuestLaPw") {
-        $paramValue = $GuestLaPw
+foreach ($item in $dataKeysForChecksum) {
+    Write-Host "DEBUG: Publishing '$($item.ParamName)' as '$($item.KvpKey)' (length: $($item.Value.Length))"
+    try {
+        Publish-KvpEncryptedValue -VmName $GuestHostName -Key $item.KvpKey -Value $item.Value -AesKey $aesKey
+        Write-Host "DEBUG: Successfully published '$($item.KvpKey)'"
     }
-    elseif ($paramName -eq "GuestDomainJoinPw") {
-        $paramValue = $GuestDomainJoinPw
-    }
-    else {
-        $paramValue = $PSBoundParameters[$paramName]
-    }
-
-    # Skip publishing if the parameter value is null or empty (matching checksum logic)
-    if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
-        # Convert parameter name to KVP key name using convention
-        $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
-        Write-Host "DEBUG: Publishing '$paramName' as '$kvpKeyName' (length: $($paramValue.Length))"
-        try {
-            Publish-KvpEncryptedValue -VmName $GuestHostName -Key $kvpKeyName -Value $paramValue -AesKey $aesKey
-            Write-Host "DEBUG: Successfully published '$kvpKeyName'"
-        }
-        catch {
-            Write-Host "ERROR: Failed to publish encrypted value for parameter '$paramName' (key: '$kvpKeyName'): $_"
-        }
-    } else {
-        Write-Host "DEBUG: Skipping '$paramName' - value is null/empty/whitespace"
+    catch {
+        Write-Host "ERROR: Failed to publish encrypted value for parameter '$($item.ParamName)' (key: '$($item.KvpKey)'): $_"
     }
 }
 
