@@ -9,19 +9,19 @@ $ImageFilename = $ImageName + ".vhdx"
 
 # Define static variables
 $StaticImagesPath = Get-ChildItem -Path "C:\ClusterStorage" -Directory |
-    ForEach-Object {
-        $diskImagesPath = Join-Path $_.FullName "DiskImages"
-        if (Test-Path $diskImagesPath) {
-            return $diskImagesPath
-        }
-    } |
-    Select-Object -First 1
+ForEach-Object {
+    $diskImagesPath = Join-Path $_.FullName "DiskImages"
+    if (Test-Path $diskImagesPath) {
+        return $diskImagesPath
+    }
+} |
+Select-Object -First 1
 $StaticFolder = "Hyper-V"
 
 # Get the cluster shared volumes and identify the one with the largest free space
 $TargetVolume = Get-ClusterSharedVolume |
-    Sort-Object { $_.SharedVolumeInfo.Partition.FreeSpace } -Descending |
-    Select-Object -First 1
+Sort-Object { $_.SharedVolumeInfo.Partition.FreeSpace } -Descending |
+Select-Object -First 1
 
 if (-not $TargetVolume) {
     Write-Error "No cluster shared volumes found."
@@ -45,7 +45,8 @@ try {
     New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
     Copy-Item -Path $ImagePath -Destination $DestinationPath -Force
     return $DestinationPath
-} catch {
+}
+catch {
     Write-Error "Failed to copy the image: $_"
     exit 1
 }

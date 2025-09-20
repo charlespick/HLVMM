@@ -1,14 +1,14 @@
 param (
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$OSFamily,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [int]$GBRam,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [int]$CPUcores,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$VMDataFolder,
 
     [int]$VLANId = $null

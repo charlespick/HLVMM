@@ -202,7 +202,8 @@ function Get-RsaFromGuestProvisioningKey {
             if (($lengthByte -band 0x80) -eq 0) {
                 # Short form length
                 $totalLength = $lengthByte
-            } else {
+            }
+            else {
                 # Long form length
                 $lengthBytes = $lengthByte -band 0x7F
                 if ($lengthBytes -gt 4) { throw "Length field too long" }
@@ -226,7 +227,8 @@ function Get-RsaFromGuestProvisioningKey {
             
             if (($modulusLengthByte -band 0x80) -eq 0) {
                 $modulusLength = $modulusLengthByte
-            } else {
+            }
+            else {
                 $lengthBytes = $modulusLengthByte -band 0x7F
                 for ($i = 0; $i -lt $lengthBytes; $i++) {
                     $modulusLength = ($modulusLength -shl 8) + $keyBytes[$offset]
@@ -293,8 +295,8 @@ $provisioningDataItems = @(
 
 # Filter to only items with non-empty values, then sort by KVP key for consistent checksum
 $dataKeysForChecksum = $provisioningDataItems | 
-    Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) } | 
-    Sort-Object { $_.KvpKey }
+Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) } | 
+Sort-Object { $_.KvpKey }
 
 # Concatenate all values in sorted key order for checksum calculation
 $provisioningData = ($dataKeysForChecksum | ForEach-Object { $_.Value }) -join "|"

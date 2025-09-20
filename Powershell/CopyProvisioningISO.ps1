@@ -34,7 +34,8 @@ function Copy-ISO {
         $DestinationPath = Join-Path -Path $DestinationFolder -ChildPath (Split-Path -Path $SourcePath -Leaf)
         Copy-Item -Path $SourcePath -Destination $DestinationPath -Force -ErrorAction Stop
         Write-Host "Successfully copied '$SourcePath' to '$DestinationPath'."
-    } catch {
+    }
+    catch {
         Write-Error "Failed to copy ISO file: $_"
         exit 1
     }

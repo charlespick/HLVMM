@@ -118,7 +118,8 @@ Set-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.host_provisioning_system_st
 $scriptsVersionPath = Join-Path -Path $PSScriptRoot -ChildPath "scriptsversion"
 if (Test-Path $scriptsVersionPath) {
     $scriptsVersion = Get-Content $scriptsVersionPath -Raw
-} else {
+}
+else {
     $scriptsVersion = "unknown"
 }
 Set-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.version" -Value $scriptsVersion
