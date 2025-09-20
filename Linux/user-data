@@ -173,13 +173,13 @@ write_files:
           # Eject CD-ROM drives early to prevent interference with reboots
           eject_cdroms
 
-          # Wait until hostprovisioningsystemstate equals waitingforpublickey
+          # Wait until hlvmm.meta.host_provisioning_system_state equals waitingforpublickey
           echo "Waiting for host to signal 'waitingforpublickey'..."
           local timeout=300 # 5 minutes
           local elapsed=0
           
           while true; do
-              host_state=$(read_hyperv_kvp "hostprovisioningsystemstate")
+              host_state=$(read_hyperv_kvp "hlvmm.meta.host_provisioning_system_state")
               
               if [[ "$host_state" == "waitingforpublickey" ]]; then
                   echo "Host is ready for public key exchange"
@@ -244,31 +244,31 @@ write_files:
           echo "Converting public key to Base64 format..."
           public_key_der=$(openssl rsa -pubin -in "$public_key" -RSAPublicKey_out -outform DER | base64 -w 0)
 
-          # Publish the public key to guestprovisioningpublickey in KVP
+          # Publish the public key to hlvmm.meta.guest_provisioning_public_key in KVP
           echo "Publishing public key to KVP..."
-          if write_hyperv_kvp "guestprovisioningpublickey" "$public_key_der"; then
+          if write_hyperv_kvp "hlvmm.meta.guest_provisioning_public_key" "$public_key_der"; then
               echo "Public key published successfully"
           else
               echo "ERROR: Failed to publish public key"
               return 1
           fi
 
-          # Set guestprovisioningsystemstate to waitingforaeskey (note: correct key name!)
+          # Set hlvmm.meta.guest_provisioning_system_state to waitingforaeskey
           echo "Setting guest state to 'waitingforaeskey'..."
-          if write_hyperv_kvp "guestprovisioningsystemstate" "waitingforaeskey"; then
+          if write_hyperv_kvp "hlvmm.meta.guest_provisioning_system_state" "waitingforaeskey"; then
               echo "Guest state set successfully"
           else
               echo "ERROR: Failed to set guest state"
               return 1
           fi
 
-          # Wait for hostprovisioningsystemstate to equal provisioningdatapublished (note: correct key name!)
+          # Wait for hlvmm.meta.host_provisioning_system_state to equal provisioningdatapublished
           echo "Waiting for host to publish provisioning data..."
           timeout=300 # 5 minutes
           elapsed=0
           
           while true; do
-              host_state=$(read_hyperv_kvp "hostprovisioningsystemstate")
+              host_state=$(read_hyperv_kvp "hlvmm.meta.host_provisioning_system_state")
               
               if [[ "$host_state" == "provisioningdatapublished" ]]; then
                   echo "Host has published provisioning data"
@@ -286,7 +286,7 @@ write_files:
 
           # Read the shared AES key from KVP
           echo "Reading shared AES key from KVP..."
-          shared_aes_key=$(read_hyperv_kvp "sharedaeskey")
+          shared_aes_key=$(read_hyperv_kvp "hlvmm.meta.shared_aes_key")
           if [[ -z "$shared_aes_key" ]]; then
               echo "ERROR: Shared AES key not found in KVP"
               return 1
@@ -316,21 +316,21 @@ write_files:
           # Debug: Show AES key length for verification
           echo "DEBUG: Decrypted AES key length: $aes_key_size bytes"
 
-          # Define the keys to decrypt (must match exactly with Windows PowerShell version)
+          # Define the keys to decrypt with new standardized names
           keys_to_decrypt=(
-              "guesthostname"
-              "guestv4ipaddr"
-              "guestv4cidrprefix"
-              "guestv4defaultgw"
-              "guestv4dns1"
-              "guestv4dns2"
-              "guestnetdnssuffix"
-              "guestdomainjointarget"
-              "guestdomainjoinuid"
-              "guestdomainjoinpw"
-              "guestdomainjoinou"
-              "guestlauid"
-              "guestlapw"
+              "hlvmm.data.guest_host_name"
+              "hlvmm.data.guest_v4_ip_addr"
+              "hlvmm.data.guest_v4_cidr_prefix"
+              "hlvmm.data.guest_v4_default_gw"
+              "hlvmm.data.guest_v4_dns1"
+              "hlvmm.data.guest_v4_dns2"
+              "hlvmm.data.guest_net_dns_suffix"
+              "hlvmm.data.guest_domain_join_target"
+              "hlvmm.data.guest_domain_join_uid"
+              "hlvmm.data.guest_domain_join_pw"
+              "hlvmm.data.guest_domain_join_ou"
+              "hlvmm.data.guest_la_uid"
+              "hlvmm.data.guest_la_pw"
           )
 
           # Directory to store decrypted keys
@@ -353,15 +353,33 @@ write_files:
           # Clean up temporary AES key file
           rm -f "$temp_aes_key"
 
+          # Create mapping from new KVP key names to legacy filenames for backward compatibility
+          declare -A key_to_filename_mapping=(
+              ["hlvmm.data.guest_host_name"]="guesthostname"
+              ["hlvmm.data.guest_v4_ip_addr"]="guestv4ipaddr"
+              ["hlvmm.data.guest_v4_cidr_prefix"]="guestv4cidrprefix"
+              ["hlvmm.data.guest_v4_default_gw"]="guestv4defaultgw"
+              ["hlvmm.data.guest_v4_dns1"]="guestv4dns1"
+              ["hlvmm.data.guest_v4_dns2"]="guestv4dns2"
+              ["hlvmm.data.guest_net_dns_suffix"]="guestnetdnssuffix"
+              ["hlvmm.data.guest_domain_join_target"]="guestdomainjointarget"
+              ["hlvmm.data.guest_domain_join_uid"]="guestdomainjoinuid"
+              ["hlvmm.data.guest_domain_join_pw"]="guestdomainjoinpw"
+              ["hlvmm.data.guest_domain_join_ou"]="guestdomainjoinou"
+              ["hlvmm.data.guest_la_uid"]="guestlauid"
+              ["hlvmm.data.guest_la_pw"]="guestlapw"
+          )
+
           # Save each decrypted key to a file
           echo "Decrypting provisioning data keys..."
           for key in "${keys_to_decrypt[@]}"; do
               encrypted_value=$(read_hyperv_kvp "$key")
+              legacy_filename="${key_to_filename_mapping[$key]}"
               if [[ -n "$encrypted_value" ]]; then
                   # Use temporary files to handle binary data properly and avoid shell variable issues
-                  temp_encrypted="/tmp/encrypted_$key"
-                  temp_iv="/tmp/iv_$key"
-                  temp_ciphertext="/tmp/ciphertext_$key"
+                  temp_encrypted="/tmp/encrypted_$legacy_filename"
+                  temp_iv="/tmp/iv_$legacy_filename"
+                  temp_ciphertext="/tmp/ciphertext_$legacy_filename"
                   
                   # Decode base64 to temporary file
                   echo "$encrypted_value" | base64 -d > "$temp_encrypted"
@@ -370,7 +388,7 @@ write_files:
                   encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
                   if [[ $encrypted_size -lt 16 ]]; then
                       echo "ERROR: Invalid encrypted data for $key (size: $encrypted_size bytes)"
-                      touch "$decrypted_keys_dir/$key"
+                      touch "$decrypted_keys_dir/$legacy_filename"
                       rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
                       continue
                   fi
@@ -384,20 +402,20 @@ write_files:
                   
                   # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
                   if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
-                      echo "$decrypted_value" > "$decrypted_keys_dir/$key"
+                      echo "$decrypted_value" > "$decrypted_keys_dir/$legacy_filename"
                       echo "Successfully decrypted $key"
                   elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
-                      echo "$decrypted_value" > "$decrypted_keys_dir/$key"
+                      echo "$decrypted_value" > "$decrypted_keys_dir/$legacy_filename"
                       echo "Successfully decrypted $key (with nopad)"
                   else
                       echo "ERROR: Failed to decrypt value for $key"
-                      touch "$decrypted_keys_dir/$key"
+                      touch "$decrypted_keys_dir/$legacy_filename"
                   fi
                   
                   # Clean up temporary files
                   rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
               else
-                  touch "$decrypted_keys_dir/$key"
+                  touch "$decrypted_keys_dir/$legacy_filename"
               fi
           done
 
@@ -411,28 +429,29 @@ write_files:
               fi
           }
 
-          # Verify the checksum of the provisioning data (must match PowerShell order exactly)
+          # Verify the checksum of the provisioning data (calculated from all hlvmm.data values)
           echo "Verifying provisioning data checksum..."
           
-          concatenated_data=$(printf "%s|" \
-              "$(read_file_safe "$decrypted_keys_dir/guesthostname")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestv4ipaddr")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestv4cidrprefix")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestv4defaultgw")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestv4dns1")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestv4dns2")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestnetdnssuffix")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestdomainjointarget")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestdomainjoinuid")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestdomainjoinpw")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestdomainjoinou")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestlauid")" \
-              "$(read_file_safe "$decrypted_keys_dir/guestlapw")")
-          concatenated_data=${concatenated_data%|} # Remove trailing pipe
+          # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
+          declare -A data_values
+          for key in "${keys_to_decrypt[@]}"; do
+              legacy_filename="${key_to_filename_mapping[$key]}"
+              data_values["$key"]="$(read_file_safe "$decrypted_keys_dir/$legacy_filename")"
+          done
+          
+          # Sort keys and concatenate values
+          concatenated_data=""
+          for key in $(printf '%s\n' "${!data_values[@]}" | sort); do
+              if [[ -n "$concatenated_data" ]]; then
+                  concatenated_data="${concatenated_data}|${data_values[$key]}"
+              else
+                  concatenated_data="${data_values[$key]}"
+              fi
+          done
 
           # Calculate checksum and encode as Base64 (to match Windows version)
           calculated_checksum=$(echo -n "$concatenated_data" | sha256sum -b | awk '{print $1}' | xxd -r -p | base64 -w 0)          
-          published_checksum=$(read_hyperv_kvp "provisioningsystemchecksum")
+          published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
 
           if [[ "$calculated_checksum" != "$published_checksum" ]]; then
               echo "ERROR: Checksum verification failed!"
