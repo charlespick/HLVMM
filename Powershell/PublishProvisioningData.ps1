@@ -305,13 +305,7 @@ foreach ($paramName in $keysToPublish) {
 }
 
 # Sort by key name to ensure consistent ordering
-# NOTE: Sort-Object Key on hashtables has a bug - we extract keys, sort them, then rebuild
-$keyDict = @{}
-foreach ($item in $dataKeysForChecksum) {
-    $keyDict[$item.Key] = $item.Value
-}
-$sortedKeys = $keyDict.Keys | Sort-Object
-$sortedDataKeys = $sortedKeys | ForEach-Object { @{ Key = $_; Value = $keyDict[$_] } }
+$sortedDataKeys = $dataKeysForChecksum | Sort-Object { $_.Key }
 
 # Concatenate all hlvmm.data values in sorted key order
 $provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
