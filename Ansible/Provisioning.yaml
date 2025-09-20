@@ -7,12 +7,12 @@
     - name: Determine OS Family from Image Name
       set_fact:
         os_family: >-
-          {%- if image_name is regex_match('^(Windows|Microsoft Windows).*', ignorecase=true) -%}
+          {%- if image_name is regex_search('^(Windows|Microsoft Windows).*', ignorecase=True) -%}
           windows
-          {%- elif image_name is regex_match('^(Ubuntu|Red Hat Enterprise Linux|RHEL|CentOS|Rocky Linux|AlmaLinux|Oracle Linux|Debian|SUSE|openSUSE|Fedora).*', ignorecase=true) -%}
+          {%- elif image_name is regex_search('^(Ubuntu|Red Hat Enterprise Linux|RHEL|CentOS|Rocky Linux|AlmaLinux|Oracle Linux|Debian|SUSE|openSUSE|Fedora).*', ignorecase=True) -%}
           linux
           {%- else -%}
-          {{ fail('Unsupported OS detected in image_name: ' + image_name + '. Supported OS families: Windows*, Microsoft Windows*, Ubuntu*, Red Hat Enterprise Linux*, RHEL*, CentOS*, Rocky Linux*, AlmaLinux*, Oracle Linux*, Debian*, SUSE*, openSUSE*, Fedora*') }}
+          {{ 'Unsupported OS detected in image_name: ' ~ image_name ~ '. Supported OS families: Windows*, Microsoft Windows*, Ubuntu*, Red Hat Enterprise Linux*, RHEL*, CentOS*, Rocky Linux*, AlmaLinux*, Oracle Linux*, Debian*, SUSE*, openSUSE*, Fedora*' | fail }}
           {%- endif -%}
 
     - name: Set default domain credentials if specified
