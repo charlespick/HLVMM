@@ -274,32 +274,18 @@ function Get-RsaFromGuestProvisioningKey {
 
 #region Provisioning Data Checksum Calculation and Publishing
 
-# Calculate checksum from all hlvmm.data values that will be published
-# Use the same parameter mapping to ensure consistency
-$paramToKeyMapping = @{
-    "GuestHostName"         = "hlvmm.data.guest_host_name"
-    "GuestV4IpAddr"         = "hlvmm.data.guest_v4_ip_addr"
-    "GuestV4CidrPrefix"     = "hlvmm.data.guest_v4_cidr_prefix"
-    "GuestV4DefaultGw"      = "hlvmm.data.guest_v4_default_gw"
-    "GuestV4Dns1"           = "hlvmm.data.guest_v4_dns1"
-    "GuestV4Dns2"           = "hlvmm.data.guest_v4_dns2"
-    "GuestNetDnsSuffix"     = "hlvmm.data.guest_net_dns_suffix"
-    "GuestDomainJoinTarget" = "hlvmm.data.guest_domain_join_target"
-    "GuestDomainJoinUid"    = "hlvmm.data.guest_domain_join_uid"
-    "GuestDomainJoinPw"     = "hlvmm.data.guest_domain_join_pw"
-    "GuestDomainJoinOU"     = "hlvmm.data.guest_domain_join_ou"
-    "GuestLaUid"            = "hlvmm.data.guest_la_uid"
-    "GuestLaPw"             = "hlvmm.data.guest_la_pw"
+# Build array of keys to publish first
+$keysToPublish = @($PSBoundParameters.Keys)
+$keysToPublish += "GuestLaPw"
+
+if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
+    $keysToPublish += "GuestDomainJoinPw"
 }
 
 # Build sorted list of key-value pairs for all hlvmm.data keys that will be published
 $dataKeysForChecksum = @()
-$allParams = @($PSBoundParameters.Keys) + @("GuestLaPw")
-if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
-    $allParams += "GuestDomainJoinPw"
-}
 
-foreach ($paramName in $allParams) {
+foreach ($paramName in $keysToPublish) {
     if ($paramName -eq "GuestLaPw") {
         $paramValue = $GuestLaPw
     }
@@ -310,8 +296,9 @@ foreach ($paramName in $allParams) {
         $paramValue = $PSBoundParameters[$paramName]
     }
 
-    $kvpKeyName = $paramToKeyMapping[$paramName]
-    if ($kvpKeyName -and -not [string]::IsNullOrWhiteSpace($paramValue)) {
+    # Convert parameter name to KVP key name using convention
+    $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
+    if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         $dataKeysForChecksum += @{ Key = $kvpKeyName; Value = $paramValue }
     }
 }
@@ -414,17 +401,13 @@ foreach ($paramName in $keysToPublish) {
 
     # Skip publishing if the parameter value is null or empty
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
-        $kvpKeyName = $paramToKeyMapping[$paramName]
-        if ($kvpKeyName) {
-            try {
-                Publish-KvpEncryptedValue -VmName $GuestHostName -Key $kvpKeyName -Value $paramValue -AesKey $aesKey
-            }
-            catch {
-                Write-Host "Failed to publish encrypted value for parameter '$paramName' (key: '$kvpKeyName'): $_"
-            }
+        # Convert parameter name to KVP key name using convention
+        $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
+        try {
+            Publish-KvpEncryptedValue -VmName $GuestHostName -Key $kvpKeyName -Value $paramValue -AesKey $aesKey
         }
-        else {
-            Write-Host "Warning: No KVP key mapping found for parameter '$paramName'"
+        catch {
+            Write-Host "Failed to publish encrypted value for parameter '$paramName' (key: '$kvpKeyName'): $_"
         }
     }
 }

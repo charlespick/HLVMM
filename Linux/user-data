@@ -316,22 +316,29 @@ write_files:
           # Debug: Show AES key length for verification
           echo "DEBUG: Decrypted AES key length: $aes_key_size bytes"
 
-          # Define the keys to decrypt with new standardized names
-          keys_to_decrypt=(
-              "hlvmm.data.guest_host_name"
-              "hlvmm.data.guest_v4_ip_addr"
-              "hlvmm.data.guest_v4_cidr_prefix"
-              "hlvmm.data.guest_v4_default_gw"
-              "hlvmm.data.guest_v4_dns1"
-              "hlvmm.data.guest_v4_dns2"
-              "hlvmm.data.guest_net_dns_suffix"
-              "hlvmm.data.guest_domain_join_target"
-              "hlvmm.data.guest_domain_join_uid"
-              "hlvmm.data.guest_domain_join_pw"
-              "hlvmm.data.guest_domain_join_ou"
-              "hlvmm.data.guest_la_uid"
-              "hlvmm.data.guest_la_pw"
-          )
+          # Get all hlvmm.data keys dynamically instead of using hardcoded list
+          hlvmm_data_keys=()
+          local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+          
+          if [[ -f "$kvp_file" ]]; then
+              local nb=$(wc -c < "$kvp_file")
+              local nkv=$(( nb / (512+2048) ))
+              
+              for n in $(seq 0 $(( $nkv - 1 )) ); do
+                  local offset=$(( $n * (512 + 2048) ))
+                  local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+                  if [[ "$k" == hlvmm.data.* ]]; then
+                      hlvmm_data_keys+=("$k")
+                  fi
+              done
+          fi
+          
+          if [[ ${#hlvmm_data_keys[@]} -eq 0 ]]; then
+              echo "ERROR: No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
+              return 1
+          fi
+          
+          echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt"
 
           # Directory to store decrypted keys
           decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
@@ -353,33 +360,17 @@ write_files:
           # Clean up temporary AES key file
           rm -f "$temp_aes_key"
 
-          # Create mapping from new KVP key names to legacy filenames for backward compatibility
-          declare -A key_to_filename_mapping=(
-              ["hlvmm.data.guest_host_name"]="guesthostname"
-              ["hlvmm.data.guest_v4_ip_addr"]="guestv4ipaddr"
-              ["hlvmm.data.guest_v4_cidr_prefix"]="guestv4cidrprefix"
-              ["hlvmm.data.guest_v4_default_gw"]="guestv4defaultgw"
-              ["hlvmm.data.guest_v4_dns1"]="guestv4dns1"
-              ["hlvmm.data.guest_v4_dns2"]="guestv4dns2"
-              ["hlvmm.data.guest_net_dns_suffix"]="guestnetdnssuffix"
-              ["hlvmm.data.guest_domain_join_target"]="guestdomainjointarget"
-              ["hlvmm.data.guest_domain_join_uid"]="guestdomainjoinuid"
-              ["hlvmm.data.guest_domain_join_pw"]="guestdomainjoinpw"
-              ["hlvmm.data.guest_domain_join_ou"]="guestdomainjoinou"
-              ["hlvmm.data.guest_la_uid"]="guestlauid"
-              ["hlvmm.data.guest_la_pw"]="guestlapw"
-          )
-
-          # Save each decrypted key to a file
+          # Save each decrypted key to a file using the actual KVP key name
           echo "Decrypting provisioning data keys..."
-          for key in "${keys_to_decrypt[@]}"; do
+          for key in "${hlvmm_data_keys[@]}"; do
               encrypted_value=$(read_hyperv_kvp "$key")
-              legacy_filename="${key_to_filename_mapping[$key]}"
+              # Create safe filename by replacing dots with underscores  
+              safe_filename=$(echo "$key" | sed 's/\./_/g')
               if [[ -n "$encrypted_value" ]]; then
                   # Use temporary files to handle binary data properly and avoid shell variable issues
-                  temp_encrypted="/tmp/encrypted_$legacy_filename"
-                  temp_iv="/tmp/iv_$legacy_filename"
-                  temp_ciphertext="/tmp/ciphertext_$legacy_filename"
+                  temp_encrypted="/tmp/encrypted_$safe_filename"
+                  temp_iv="/tmp/iv_$safe_filename"
+                  temp_ciphertext="/tmp/ciphertext_$safe_filename"
                   
                   # Decode base64 to temporary file
                   echo "$encrypted_value" | base64 -d > "$temp_encrypted"
@@ -388,7 +379,7 @@ write_files:
                   encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
                   if [[ $encrypted_size -lt 16 ]]; then
                       echo "ERROR: Invalid encrypted data for $key (size: $encrypted_size bytes)"
-                      touch "$decrypted_keys_dir/$legacy_filename"
+                      touch "$decrypted_keys_dir/$safe_filename"
                       rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
                       continue
                   fi
@@ -402,20 +393,20 @@ write_files:
                   
                   # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
                   if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
-                      echo "$decrypted_value" > "$decrypted_keys_dir/$legacy_filename"
-                      echo "Successfully decrypted $key"
+                      echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
+                      echo "Successfully decrypted $key -> $safe_filename"
                   elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
-                      echo "$decrypted_value" > "$decrypted_keys_dir/$legacy_filename"
-                      echo "Successfully decrypted $key (with nopad)"
+                      echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
+                      echo "Successfully decrypted $key -> $safe_filename (with nopad)"
                   else
                       echo "ERROR: Failed to decrypt value for $key"
-                      touch "$decrypted_keys_dir/$legacy_filename"
+                      touch "$decrypted_keys_dir/$safe_filename"
                   fi
                   
                   # Clean up temporary files
                   rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
               else
-                  touch "$decrypted_keys_dir/$legacy_filename"
+                  touch "$decrypted_keys_dir/$safe_filename"
               fi
           done
 
@@ -434,9 +425,9 @@ write_files:
           
           # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
           declare -A data_values
-          for key in "${keys_to_decrypt[@]}"; do
-              legacy_filename="${key_to_filename_mapping[$key]}"
-              data_values["$key"]="$(read_file_safe "$decrypted_keys_dir/$legacy_filename")"
+          for key in "${hlvmm_data_keys[@]}"; do
+              safe_filename=$(echo "$key" | sed 's/\./_/g')
+              data_values["$key"]="$(read_file_safe "$decrypted_keys_dir/$safe_filename")"
           done
           
           # Sort keys and concatenate values
@@ -465,8 +456,8 @@ write_files:
           echo "Checksum verification succeeded."
 
           # Configure local admin account if credentials are provided and non-empty
-          local_admin_user=$(read_file_safe "$decrypted_keys_dir/guestlauid" | tr -d '\0\r\n' | xargs)
-          local_admin_password=$(read_file_safe "$decrypted_keys_dir/guestlapw" | tr -d '\0\r\n' | xargs)
+          local_admin_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_uid" | tr -d '\0\r\n' | xargs)
+          local_admin_password=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_pw" | tr -d '\0\r\n' | xargs)
 
           if [[ -n "$local_admin_user" && -n "$local_admin_password" ]]; then
               if id "$local_admin_user" &>/dev/null; then
@@ -493,18 +484,18 @@ write_files:
           fi
 
           # Ignore domain join parameters
-          if [[ -f "$decrypted_keys_dir/guestdomainjointarget" || -f "$decrypted_keys_dir/guestdomainjoinuid" || -f "$decrypted_keys_dir/guestdomainjoinpw" ]]; then
+          if [[ -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_target" || -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_uid" || -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_pw" ]]; then
               echo "Domain join parameters detected but ignored (not supported on Linux)."
           fi
 
           # Configure the network with netplan if IP settings are complete and valid
           # Read network configuration values safely
-          ip_address=$(read_file_safe "$decrypted_keys_dir/guestv4ipaddr" | tr -d '\0\r\n' | xargs)
-          cidr_prefix=$(read_file_safe "$decrypted_keys_dir/guestv4cidrprefix" | tr -d '\0\r\n' | xargs)
-          default_gateway=$(read_file_safe "$decrypted_keys_dir/guestv4defaultgw" | tr -d '\0\r\n' | xargs)
-          dns1=$(read_file_safe "$decrypted_keys_dir/guestv4dns1" | tr -d '\0\r\n' | xargs)
-          dns2=$(read_file_safe "$decrypted_keys_dir/guestv4dns2" | tr -d '\0\r\n' | xargs)
-          dns_suffix=$(read_file_safe "$decrypted_keys_dir/guestnetdnssuffix" | tr -d '\0\r\n' | xargs)
+          ip_address=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_ip_addr" | tr -d '\0\r\n' | xargs)
+          cidr_prefix=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_cidr_prefix" | tr -d '\0\r\n' | xargs)
+          default_gateway=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_default_gw" | tr -d '\0\r\n' | xargs)
+          dns1=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_dns1" | tr -d '\0\r\n' | xargs)
+          dns2=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_dns2" | tr -d '\0\r\n' | xargs)
+          dns_suffix=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_net_dns_suffix" | tr -d '\0\r\n' | xargs)
           
           # Check if all required network parameters are provided and non-empty
           if [[ -n "$ip_address" && -n "$cidr_prefix" && -n "$default_gateway" ]]; then
@@ -571,7 +562,7 @@ write_files:
           fi
 
           # Set the hostname if it is provided and non-empty
-          hostname=$(read_file_safe "$decrypted_keys_dir/guesthostname" | tr -d '\0\r\n' | xargs)
+          hostname=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_host_name" | tr -d '\0\r\n' | xargs)
           if [[ -n "$hostname" ]]; then
               echo "$hostname" > /etc/hostname
               hostnamectl set-hostname "$hostname"
