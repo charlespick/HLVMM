@@ -274,29 +274,35 @@ function Get-RsaFromGuestProvisioningKey {
 
 #region Provisioning Data Checksum Calculation and Publishing
 
-# Concatenate all provisioning data in a predictable order
-# Use empty string for null/undefined optional parameters to ensure consistent checksum
-$provisioningData = @(
-    $GuestHostName,
-    $(if ($GuestV4IpAddr) { $GuestV4IpAddr } else { "" }),
-    $(if ($GuestV4CidrPrefix) { $GuestV4CidrPrefix } else { "" }),
-    $(if ($GuestV4DefaultGw) { $GuestV4DefaultGw } else { "" }),
-    $(if ($GuestV4Dns1) { $GuestV4Dns1 } else { "" }),
-    $(if ($GuestV4Dns2) { $GuestV4Dns2 } else { "" }),
-    $(if ($GuestNetDnsSuffix) { $GuestNetDnsSuffix } else { "" }),
-    $(if ($GuestDomainJoinTarget) { $GuestDomainJoinTarget } else { "" }),
-    $(if ($GuestDomainJoinUid) { $GuestDomainJoinUid } else { "" }),
-    $(if ($GuestDomainJoinPw) { $GuestDomainJoinPw } else { "" }),
-    $(if ($GuestDomainJoinOU) { $GuestDomainJoinOU } else { "" }),
-    $GuestLaUid,
-    $GuestLaPw
-) -join "|"
+# Define all possible provisioning data values with their KVP key names
+$provisioningDataItems = @(
+    @{ ParamName = "GuestV4IpAddr"; KvpKey = "hlvmm.data.guest_v4_ip_addr"; Value = $GuestV4IpAddr }
+    @{ ParamName = "GuestV4CidrPrefix"; KvpKey = "hlvmm.data.guest_v4_cidr_prefix"; Value = $GuestV4CidrPrefix }
+    @{ ParamName = "GuestV4DefaultGw"; KvpKey = "hlvmm.data.guest_v4_default_gw"; Value = $GuestV4DefaultGw }
+    @{ ParamName = "GuestV4Dns1"; KvpKey = "hlvmm.data.guest_v4_dns1"; Value = $GuestV4Dns1 }
+    @{ ParamName = "GuestV4Dns2"; KvpKey = "hlvmm.data.guest_v4_dns2"; Value = $GuestV4Dns2 }
+    @{ ParamName = "GuestNetDnsSuffix"; KvpKey = "hlvmm.data.guest_net_dns_suffix"; Value = $GuestNetDnsSuffix }
+    @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
+    @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
+    @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_o_u"; Value = $GuestDomainJoinOU }
+    @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
+    @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
+    @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }
+    @{ ParamName = "GuestDomainJoinPw"; KvpKey = "hlvmm.data.guest_domain_join_pw"; Value = $GuestDomainJoinPw }
+)
+
+# Filter to only items with non-empty values, then sort by KVP key for consistent checksum
+$dataKeysForChecksum = $provisioningDataItems | 
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) } | 
+    Sort-Object { $_.KvpKey }
+
+# Concatenate all values in sorted key order for checksum calculation
+$provisioningData = ($dataKeysForChecksum | ForEach-Object { $_.Value }) -join "|"
 
 # Compute a checksum of the concatenated data
 try {
-    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-        [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
-    )
+    $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
+    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($utf8Bytes)
     $checksum = [Convert]::ToBase64String($hash)
 }
 catch {
@@ -305,7 +311,7 @@ catch {
 
 # Publish the checksum to the KVP
 try {
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "provisioningsystemchecksum" -Value $checksum
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.provisioning_system_checksum" -Value $checksum
     Write-Host "Successfully published checksum for provisioning data on VM '$GuestHostName'."
 }
 catch {
@@ -327,7 +333,7 @@ catch {
 
 # Retrieve the guest provisioning public key from the KVP
 try {
-    $guestProvisioningPublicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "guestprovisioningpublickey"
+    $guestProvisioningPublicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.guest_provisioning_public_key"
     if (-not $guestProvisioningPublicKey) {
         throw "Guest provisioning public key is not set in the KVP."
     }
@@ -351,8 +357,8 @@ catch {
 
 # Publish the wrapped AES key to the KVP
 try {
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "sharedaeskey" -Value $wrappedAesKey
-    Write-Host "Successfully published wrapped AES key to KVP as 'sharedaeskey'."
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.shared_aes_key" -Value $wrappedAesKey
+    Write-Host "Successfully published wrapped AES key to KVP as 'hlvmm.meta.shared_aes_key'."
 }
 catch {
     throw "Failed to publish the wrapped AES key to the KVP: $_"
@@ -362,40 +368,25 @@ catch {
 
 # Publish each defined parameter to the KVP as an encrypted value
 
-# Build array of keys to publish
-$keysToPublish = @($PSBoundParameters.Keys)
+Write-Host "=== PUBLISHING KVP VALUES ==="
 
-$keysToPublish += "GuestLaPw"
+$keysToPublish = $dataKeysForChecksum | ForEach-Object { $_.ParamName }
+Write-Host "DEBUG: Publishing keys: $($keysToPublish -join ', ')"
 
-if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
-    $keysToPublish += "GuestDomainJoinPw"
-}
-
-foreach ($paramName in $keysToPublish) {
-    if ($paramName -eq "GuestLaPw") {
-        $paramValue = $GuestLaPw
+foreach ($item in $dataKeysForChecksum) {
+    Write-Host "DEBUG: Publishing '$($item.ParamName)' as '$($item.KvpKey)' (length: $($item.Value.Length))"
+    try {
+        Publish-KvpEncryptedValue -VmName $GuestHostName -Key $item.KvpKey -Value $item.Value -AesKey $aesKey
+        Write-Host "DEBUG: Successfully published '$($item.KvpKey)'"
     }
-    elseif ($paramName -eq "GuestDomainJoinPw") {
-        $paramValue = $GuestDomainJoinPw
-    }
-    else {
-        $paramValue = $PSBoundParameters[$paramName]
-    }
-
-    # Skip publishing if the parameter value is null or empty
-    if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
-        try {
-            Publish-KvpEncryptedValue -VmName $GuestHostName -Key $paramName.ToLower() -Value $paramValue -AesKey $aesKey
-        }
-        catch {
-            Write-Host "Failed to publish encrypted value for parameter '$paramName': $_"
-        }
+    catch {
+        Write-Host "ERROR: Failed to publish encrypted value for parameter '$($item.ParamName)' (key: '$($item.KvpKey)'): $_"
     }
 }
 
 # Publish the host provisioning system state to the KVP
 try {
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "hostprovisioningsystemstate" -Value "provisioningdatapublished"
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "provisioningdatapublished"
     Write-Host "Provisioning system state 'provisioningdatapublished'."
 }
 catch {

@@ -114,7 +114,7 @@ function Get-VMKeyValuePair {
 
 # Set the KVP HostProvisioningSystemState to "Waitingforpublickey"
 Write-Host "Setting up provisioning KVP values for VM '$VMName'..."
-Set-VMKeyValuePair -VMName $VMName -Name "hostprovisioningsystemstate" -Value "waitingforpublickey"
+Set-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.host_provisioning_system_state" -Value "waitingforpublickey"
 $scriptsVersionPath = Join-Path -Path $PSScriptRoot -ChildPath "scriptsversion"
 if (Test-Path $scriptsVersionPath) {
     $scriptsVersion = Get-Content $scriptsVersionPath -Raw
@@ -132,7 +132,7 @@ Write-Host "Waiting for guest provisioning to reach 'waitingforaeskey' state (ti
 
 while ($elapsedTime -lt $timeout) {
     # Get the current GuestProvisioningSystemState
-    $guestState = Get-VMKeyValuePair -VMName $VMName -Name "guestprovisioningsystemstate"
+    $guestState = Get-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.guest_provisioning_system_state"
 
     if ($guestState -eq "waitingforaeskey") {
         Write-Host "Guest provisioning state reached 'waitingforaeskey'. Setup complete."
@@ -141,7 +141,7 @@ while ($elapsedTime -lt $timeout) {
     
     # Show progress every 30 seconds
     if ($elapsedTime % 30 -eq 0) {
-        $publicKey = Get-VMKeyValuePair -VMName $VMName -Name "guestprovisioningpublickey"
+        $publicKey = Get-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.guest_provisioning_public_key"
         $statusMsg = "Elapsed: $($elapsedTime)s"
         if ($guestState) { $statusMsg += ", State: '$guestState'" }
         if ($publicKey) { $statusMsg += ", Public key received" }
@@ -154,8 +154,8 @@ while ($elapsedTime -lt $timeout) {
 }
 
 # Timeout reached
-$finalState = Get-VMKeyValuePair -VMName $VMName -Name "guestprovisioningsystemstate"
-$finalPublicKey = Get-VMKeyValuePair -VMName $VMName -Name "guestprovisioningpublickey"
+$finalState = Get-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.guest_provisioning_system_state"
+$finalPublicKey = Get-VMKeyValuePair -VMName $VMName -Name "hlvmm.meta.guest_provisioning_public_key"
 
 Write-Error "Timeout reached after $($timeout/60) minutes. Guest did not reach 'waitingforaeskey' state."
 Write-Host "Final status - State: '$finalState', Public key: $(if ($finalPublicKey) { "received" } else { "not received" })"

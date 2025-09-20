@@ -70,6 +70,42 @@ function Decrypt-AesCbcWithPrependedIV {
     }
 }
 
+function Get-HlvmmDataKeys {
+    # Get all KVP keys from registry that start with "hlvmm.data." and decrypt their values
+    param(
+        [Parameter(Mandatory)]
+        [string]$AesKey
+    )
+    
+    $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
+    $allKeys = @()
+    
+    try {
+        $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
+        if ($regItem) {
+            $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" } | ForEach-Object {
+                $keyName = $_
+                $keyValue = (Get-ItemProperty -Path $regPath -Name $keyName).$keyName
+                if ($keyValue) {
+                    try {
+                        # Decrypt the value
+                        $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $AesKey -CiphertextBase64 $keyValue -Output Utf8
+                        $allKeys += @{ Key = $keyName; Value = $decryptedValue }
+                    }
+                    catch {
+                        Write-Host "Failed to decrypt key $keyName : $_"
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "Error reading hlvmm.data keys from registry: $_"
+    }
+    
+    return $allKeys
+}
+
 if (-not (Test-Path $PhaseFile)) {
     "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
 }
@@ -97,7 +133,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
             if ($state -eq "waitingforpublickey") {
                 break
             }
@@ -144,20 +180,20 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         # Convert public key to Base64 and write it to the KVP
         $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
-        Write-HyperVKvp -Key "guestprovisioningpublickey" -Value $publicKeyBase64
+        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
 
-        Write-HyperVKvp -Key "guestprovisioningsystemstate" -Value "waitingforaeskey"
+        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value "waitingforaeskey"
 
         while ($true) {
-            $state = Read-HyperVKvp -Key "hostprovisioningsystemstate" -ErrorAction SilentlyContinue
+            $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
             if ($state -eq "provisioningdatapublished") {
                 break
             }
             Start-Sleep -Seconds 5
         }
 
-        # Read the shared AES key from "sharedaeskey"
-        $sharedAesKeyBase64 = Read-HyperVKvp -Key "sharedaeskey" -ErrorAction SilentlyContinue
+        # Read the shared AES key from "hlvmm.meta.shared_aes_key"
+        $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
         if (-not $sharedAesKeyBase64) {
             Write-Host "Failed to retrieve shared AES key. Terminating program."
             exit
@@ -166,49 +202,54 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
         $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
 
-        # Define the keys to decrypt
-        $keysToDecrypt = @(
-            "guesthostname",
-            "guestv4ipaddr",
-            "guestv4cidrprefix",
-            "guestv4defaultgw",
-            "guestv4dns1",
-            "guestv4dns2",
-            "guestnetdnssuffix",
-            "guestdomainjointarget",
-            "guestdomainjoinuid",
-            "guestdomainjoinpw",
-            "guestdomainjoinou",
-            "guestlauid",
-            "guestlapw"
-        )
+        # Get all hlvmm.data keys dynamically instead of using hardcoded list
+        $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
+        $hlvmmDataKeys = @()
+        
+        try {
+            $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
+            if ($regItem) {
+                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" }
+            }
+        }
+        catch {
+            Write-Host "Error reading hlvmm.data keys from registry: $_"
+            exit
+        }
 
-        # Decrypt and process each key
-        foreach ($key in $keysToDecrypt) {
+        if ($hlvmmDataKeys.Count -eq 0) {
+            Write-Host "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
+            exit
+        }
+
+        Write-Host "Found $($hlvmmDataKeys.Count) hlvmm.data keys to decrypt"
+
+        # Decrypt and save each key using its actual KVP key name
+        foreach ($key in $hlvmmDataKeys) {
             $encryptedValueBase64 = Read-HyperVKvp -Key $key -ErrorAction SilentlyContinue
             if (-not $encryptedValueBase64) {
                 Write-Host "Failed to retrieve encrypted value for key: $key. Skipping..."
                 continue
             }
             $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $unwrappedAesKey -CiphertextBase64 $encryptedValueBase64 -Output Utf8
-            $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$key.txt")
+            # Save using the actual KVP key name (replacing dots with underscores for valid filenames)
+            $safeFileName = $key -replace '\.', '_'
+            $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$safeFileName.txt")
             [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
+            Write-Host "Decrypted and saved: $key -> $safeFileName.txt"
         }
 
-        $concatenatedData = ($keysToDecrypt | ForEach-Object {
-                $filePath = Join-Path -Path $decryptedKeysDir -ChildPath "$_.txt"
-                if (Test-Path $filePath) {
-                    Get-Content -Path $filePath
-                }
-                else {
-                    ""
-                }
-            }) -join "|"
+        # Get all hlvmm.data keys and their decrypted values for checksum verification
+        $dataKeys = Get-HlvmmDataKeys -AesKey $unwrappedAesKey
+        
+        # Sort keys by name for consistent ordering and concatenate values
+        $sortedDataKeys = $dataKeys | Sort-Object { $_.Key }
+        $concatenatedData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
 
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
         $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
 
-        $provisioningSystemChecksum = Read-HyperVKvp -Key "provisioningsystemchecksum" -ErrorAction SilentlyContinue
+        $provisioningSystemChecksum = Read-HyperVKvp -Key "hlvmm.meta.provisioning_system_checksum" -ErrorAction SilentlyContinue
 
         $computedHashBase64 = [Convert]::ToBase64String($computedHash)
         if ($computedHashBase64 -ne $provisioningSystemChecksum) {
@@ -217,8 +258,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         #region: Configure hostname 
-        # Check if the "guesthostname" key exists and set the hostname
-        $guestHostNamePath = Join-Path -Path $decryptedKeysDir -ChildPath "guesthostname.txt"
+        # Check if the "hlvmm.data.guest_host_name" key exists and set the hostname
+        $guestHostNamePath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_host_name.txt"
         if (Test-Path $guestHostNamePath) {
             $guestHostName = Get-Content -Path $guestHostNamePath
             if ($guestHostName) {
@@ -226,25 +267,25 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 Write-Host "Hostname set to: $guestHostName"
             }
             else {
-                Write-Host "guesthostname file is empty. Skipping hostname configuration."
+                Write-Host "hlvmm.data.guest_host_name file is empty. Skipping hostname configuration."
             }
         }
         else {
-            Write-Host "guesthostname key does not exist. Skipping hostname configuration."
+            Write-Host "hlvmm.data.guest_host_name key does not exist. Skipping hostname configuration."
         }
         #endregion
         
         #region: Configure network
         # Check if the IP address is defined
-        $guestV4IpAddrPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestv4ipaddr.txt"
+        $guestV4IpAddrPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_ip_addr.txt"
         if (Test-Path $guestV4IpAddrPath) {
             $guestV4IpAddr = Get-Content -Path $guestV4IpAddrPath
             if ($guestV4IpAddr) {
                 # Retrieve other network settings
-                $guestV4CidrPrefix = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4cidrprefix.txt")
-                $guestV4DefaultGw = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4defaultgw.txt")
-                $guestV4Dns1 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4dns1.txt")
-                $guestV4Dns2 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "guestv4dns2.txt")
+                $guestV4CidrPrefix = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_cidr_prefix.txt")
+                $guestV4DefaultGw = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_default_gw.txt")
+                $guestV4Dns1 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_dns1.txt")
+                $guestV4Dns2 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_dns2.txt")
 
                 # Configure the network adapter
                 $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
@@ -259,22 +300,22 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 }
             }
             else {
-                Write-Host "guestv4ipaddr file is empty. Skipping network configuration."
+                Write-Host "hlvmm.data.guest_v4_ip_addr file is empty. Skipping network configuration."
             }
         }
         else {
-            Write-Host "guestv4ipaddr key does not exist. Skipping network configuration."
+            Write-Host "hlvmm.data.guest_v4_ip_addr key does not exist. Skipping network configuration."
         }
         #endregion
 
         #region: Configure local account
-        # Check if the "guestlauid" key exists
-        $guestLaUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestlauid.txt"
+        # Check if the "hlvmm.data.guest_la_uid" key exists
+        $guestLaUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_la_uid.txt"
         if (Test-Path $guestLaUidPath) {
             $guestLaUid = Get-Content -Path $guestLaUidPath
             if ($guestLaUid) {
                 # Retrieve the password for the account
-                $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestlapw.txt"
+                $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_la_pw.txt"
                 if (Test-Path $guestLaPwPath) {
                     $guestLaPw = Get-Content -Path $guestLaPwPath
                     if ($guestLaPw) {
@@ -302,19 +343,19 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                         }
                     }
                     else {
-                        Write-Host "guestlapw file is empty. Skipping local account configuration."
+                        Write-Host "hlvmm.data.guest_la_pw file is empty. Skipping local account configuration."
                     }
                 }
                 else {
-                    Write-Host "guestlapw key does not exist. Skipping local account configuration."
+                    Write-Host "hlvmm.data.guest_la_pw key does not exist. Skipping local account configuration."
                 }
             }
             else {
-                Write-Host "guestlauid file is empty. Skipping local account configuration."
+                Write-Host "hlvmm.data.guest_la_uid file is empty. Skipping local account configuration."
             }
         }
         else {
-            Write-Host "guestlauid key does not exist. Skipping local account configuration."
+            Write-Host "hlvmm.data.guest_la_uid key does not exist. Skipping local account configuration."
         }
         #endregion
 
@@ -323,15 +364,15 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
     "phase_one" {
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
-        # Check if the "guestdomainjointarget" key exists
-        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjointarget.txt"
+        # Check if the "hlvmm.data.guest_domain_join_target" key exists
+        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_target.txt"
         if (Test-Path $guestDomainJoinTargetPath) {
             $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
             if ($guestDomainJoinTarget) {
                 # Retrieve the domain join credentials
-                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjoinuid.txt"
-                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjoinpw.txt"
-                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "guestdomainjoinou.txt"
+                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_uid.txt"
+                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_pw.txt"
+                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_ou.txt"
 
                 if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
                     $guestDomainJoinUid = (Get-Content -Path $guestDomainJoinUidPath).Trim()
@@ -371,7 +412,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                             $TaskName = "ProvisioningService"
                             Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
                             
-                            Get-ChildItem -Path $decryptedKeysDir -Filter "guest*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
+                            Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
                             Restart-Computer -Force
                         }
                         catch {
@@ -387,18 +428,18 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 }
             }
             else {
-                Write-Host "guestdomainjointarget file is empty. Skipping domain join."
+                Write-Host "hlvmm.data.guest_domain_join_target file is empty. Skipping domain join."
             }
         }
         else {
-            Write-Host "guestdomainjointarget key does not exist. Skipping domain join."
+            Write-Host "hlvmm.data.guest_domain_join_target key does not exist. Skipping domain join."
             "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
             $TaskName = "ProvisioningService"
             Write-Host "Disabling scheduled task $TaskName..."
             Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
             Write-Host "Scheduled task $TaskName has been disabled."
 
-            Get-ChildItem -Path $decryptedKeysDir -Filter "guest*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
         }
     }
 }
