@@ -421,18 +421,39 @@ write_files:
           }
 
           # Verify the checksum of the provisioning data (calculated from all hlvmm.data values)
+          echo "=== CHECKSUM VERIFICATION DEBUG ==="
           echo "Verifying provisioning data checksum..."
           
           # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
+          # IMPORTANT: Only include keys with non-empty values (matching PowerShell logic)
           declare -A data_values
+          echo "DEBUG: Processing hlvmm.data keys..."
           for key in "${hlvmm_data_keys[@]}"; do
               safe_filename=$(echo "$key" | sed 's/\./_/g')
-              data_values["$key"]="$(read_file_safe "$decrypted_keys_dir/$safe_filename")"
+              value=$(read_file_safe "$decrypted_keys_dir/$safe_filename")
+              
+              # Trim whitespace and check if non-empty (matching PowerShell [string]::IsNullOrWhiteSpace logic)
+              trimmed_value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              
+              echo "DEBUG: Key: '$key' -> Value length: ${#value} chars (trimmed: ${#trimmed_value})"
+              echo "DEBUG:   Value preview: '${value:0:20}$([ ${#value} -gt 20 ] && echo "...")'"
+              
+              # Only include in checksum if value is non-empty after trimming
+              if [[ -n "$trimmed_value" ]]; then
+                  data_values["$key"]="$value"
+                  echo "DEBUG:   -> INCLUDED in checksum calculation"
+              else
+                  echo "DEBUG:   -> EXCLUDED from checksum (empty/whitespace only)"
+              fi
           done
           
           # Sort keys and concatenate values
+          echo "DEBUG: Building concatenated data in sorted key order..."
           concatenated_data=""
-          for key in $(printf '%s\n' "${!data_values[@]}" | sort); do
+          sorted_keys=($(printf '%s\n' "${!data_values[@]}" | sort))
+          
+          for key in "${sorted_keys[@]}"; do
+              echo "DEBUG: Processing key '$key' for concatenation"
               if [[ -n "$concatenated_data" ]]; then
                   concatenated_data="${concatenated_data}|${data_values[$key]}"
               else
@@ -440,20 +461,45 @@ write_files:
               fi
           done
 
+          echo "DEBUG: Concatenated data for checksum:"
+          echo "DEBUG:   Length: ${#concatenated_data} chars"
+          echo "DEBUG:   Content: '${concatenated_data:0:200}$([ ${#concatenated_data} -gt 200 ] && echo "...")'"
+
           # Calculate checksum and encode as Base64 (to match Windows version)
-          calculated_checksum=$(echo -n "$concatenated_data" | sha256sum -b | awk '{print $1}' | xxd -r -p | base64 -w 0)          
+          echo "DEBUG: Calculating SHA256 checksum..."
+          
+          # Use a more explicit approach to avoid encoding issues
+          temp_data_file="/tmp/checksum_data"
+          printf '%s' "$concatenated_data" > "$temp_data_file"
+          
+          # Calculate SHA256 hash
+          hash_hex=$(sha256sum "$temp_data_file" | awk '{print $1}')
+          echo "DEBUG: SHA256 hash (hex): $hash_hex"
+          
+          # Convert hex to binary and then to Base64
+          calculated_checksum=$(echo "$hash_hex" | xxd -r -p | base64 -w 0)
+          echo "DEBUG: Checksum (Base64): $calculated_checksum"
+          
+          # Clean up temp file
+          rm -f "$temp_data_file"
+          
           published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
+          echo "DEBUG: Published checksum from KVP: $published_checksum"
 
           if [[ "$calculated_checksum" != "$published_checksum" ]]; then
               echo "ERROR: Checksum verification failed!"
               echo "Expected: $published_checksum"
               echo "Got:      $calculated_checksum"
-              echo "DEBUG: Concatenated data length: ${#concatenated_data} characters"
-              echo "DEBUG: First 100 chars of concatenated data: ${concatenated_data:0:100}"
+              echo "DEBUG: Hex comparison:"
+              echo "DEBUG:   Expected hex: $(echo "$published_checksum" | base64 -d | xxd -p -c 32)"
+              echo "DEBUG:   Got hex:      $hash_hex"
+              echo "DEBUG: Key count comparison:"
+              echo "DEBUG:   Found ${#hlvmm_data_keys[@]} hlvmm.data keys"
+              echo "DEBUG:   Keys: $(printf '%s ' "${sorted_keys[@]}")"
               return 1
           fi
 
-          echo "Checksum verification succeeded."
+          echo "DEBUG: Checksum verification succeeded!"
 
           # Configure local admin account if credentials are provided and non-empty
           local_admin_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_uid" | tr -d '\0\r\n' | xargs)

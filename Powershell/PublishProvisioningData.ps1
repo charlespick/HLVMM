@@ -274,13 +274,18 @@ function Get-RsaFromGuestProvisioningKey {
 
 #region Provisioning Data Checksum Calculation and Publishing
 
+Write-Host "=== CHECKSUM CALCULATION DEBUG ==="
+
 # Build array of keys to publish first
 $keysToPublish = @($PSBoundParameters.Keys)
 $keysToPublish += "GuestLaPw"
 
 if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
     $keysToPublish += "GuestDomainJoinPw"
+    Write-Host "DEBUG: Added GuestDomainJoinPw to keys to publish"
 }
+
+Write-Host "DEBUG: Initial keys to publish: $($keysToPublish -join ', ')"
 
 # Build sorted list of key-value pairs for all hlvmm.data keys that will be published
 $dataKeysForChecksum = @()
@@ -298,23 +303,45 @@ foreach ($paramName in $keysToPublish) {
 
     # Convert parameter name to KVP key name using convention
     $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
+    
+    Write-Host "DEBUG: Parameter '$paramName' -> KVP key '$kvpKeyName'"
+    Write-Host "DEBUG:   Value length: $($paramValue.Length if $paramValue else 0) chars"
+    Write-Host "DEBUG:   Value preview: '$($paramValue.Substring(0, [Math]::Min(20, $paramValue.Length)) if $paramValue else '<empty>')$(if ($paramValue.Length -gt 20) { '...' })'"
+    
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         $dataKeysForChecksum += @{ Key = $kvpKeyName; Value = $paramValue }
+        Write-Host "DEBUG:   -> INCLUDED in checksum"
+    } else {
+        Write-Host "DEBUG:   -> EXCLUDED from checksum (null/empty/whitespace)"
     }
 }
 
 # Sort by key name to ensure consistent ordering
 $sortedDataKeys = $dataKeysForChecksum | Sort-Object Key
 
+Write-Host "DEBUG: Keys included in checksum calculation (sorted):"
+foreach ($item in $sortedDataKeys) {
+    Write-Host "DEBUG:   Key: '$($item.Key)' -> Value length: $($item.Value.Length) chars"
+}
+
 # Concatenate all hlvmm.data values in sorted key order
 $provisioningData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
 
+Write-Host "DEBUG: Concatenated data for checksum:"
+Write-Host "DEBUG:   Length: $($provisioningData.Length) chars"
+Write-Host "DEBUG:   Content: '$($provisioningData.Substring(0, [Math]::Min(200, $provisioningData.Length)))$(if ($provisioningData.Length -gt 200) { '...' })'"
+
 # Compute a checksum of the concatenated data
 try {
-    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-        [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
-    )
+    $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
+    Write-Host "DEBUG: UTF-8 byte array length: $($utf8Bytes.Length) bytes"
+    Write-Host "DEBUG: First 20 bytes (hex): $(($utf8Bytes[0..([Math]::Min(19, $utf8Bytes.Length-1))] | ForEach-Object { $_.ToString('X2') }) -join ' ')"
+    
+    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($utf8Bytes)
     $checksum = [Convert]::ToBase64String($hash)
+    
+    Write-Host "DEBUG: SHA256 hash (hex): $(($hash | ForEach-Object { $_.ToString('X2') }) -join '')"
+    Write-Host "DEBUG: Checksum (Base64): $checksum"
 }
 catch {
     throw "Failed to compute the checksum: $_"
@@ -379,14 +406,17 @@ catch {
 
 # Publish each defined parameter to the KVP as an encrypted value
 
-# Build array of keys to publish
-$keysToPublish = @($PSBoundParameters.Keys)
+Write-Host "=== PUBLISHING KVP VALUES ==="
 
+# Build array of keys to publish (must match checksum calculation exactly)
+$keysToPublish = @($PSBoundParameters.Keys)
 $keysToPublish += "GuestLaPw"
 
 if (-not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)) {
     $keysToPublish += "GuestDomainJoinPw"
 }
+
+Write-Host "DEBUG: Publishing keys: $($keysToPublish -join ', ')"
 
 foreach ($paramName in $keysToPublish) {
     if ($paramName -eq "GuestLaPw") {
@@ -399,16 +429,20 @@ foreach ($paramName in $keysToPublish) {
         $paramValue = $PSBoundParameters[$paramName]
     }
 
-    # Skip publishing if the parameter value is null or empty
+    # Skip publishing if the parameter value is null or empty (matching checksum logic)
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         # Convert parameter name to KVP key name using convention
         $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
+        Write-Host "DEBUG: Publishing '$paramName' as '$kvpKeyName' (length: $($paramValue.Length))"
         try {
             Publish-KvpEncryptedValue -VmName $GuestHostName -Key $kvpKeyName -Value $paramValue -AesKey $aesKey
+            Write-Host "DEBUG: Successfully published '$kvpKeyName'"
         }
         catch {
-            Write-Host "Failed to publish encrypted value for parameter '$paramName' (key: '$kvpKeyName'): $_"
+            Write-Host "ERROR: Failed to publish encrypted value for parameter '$paramName' (key: '$kvpKeyName'): $_"
         }
+    } else {
+        Write-Host "DEBUG: Skipping '$paramName' - value is null/empty/whitespace"
     }
 }
 
