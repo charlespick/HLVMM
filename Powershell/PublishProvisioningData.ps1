@@ -305,8 +305,8 @@ foreach ($paramName in $keysToPublish) {
     $kvpKeyName = "hlvmm.data." + ($paramName -creplace '([A-Z])', '_$1').ToLower().TrimStart('_')
     
     Write-Host "DEBUG: Parameter '$paramName' -> KVP key '$kvpKeyName'"
-    Write-Host "DEBUG:   Value length: $($paramValue.Length if $paramValue else 0) chars"
-    Write-Host "DEBUG:   Value preview: '$($paramValue.Substring(0, [Math]::Min(20, $paramValue.Length)) if $paramValue else '<empty>')$(if ($paramValue.Length -gt 20) { '...' })'"
+    Write-Host "DEBUG:   Value length: $(if ($paramValue) { $paramValue.Length } else { 0 }) chars"
+    Write-Host "DEBUG:   Value preview: '$(if ($paramValue) { $paramValue.Substring(0, [Math]::Min(20, $paramValue.Length)) } else { '<empty>' })$(if ($paramValue -and $paramValue.Length -gt 20) { '...' })'"
     
     if (-not [string]::IsNullOrWhiteSpace($paramValue)) {
         $dataKeysForChecksum += @{ Key = $kvpKeyName; Value = $paramValue }
