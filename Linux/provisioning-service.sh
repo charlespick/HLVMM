@@ -45,8 +45,8 @@ read_hyperv_kvp() {
     local chunks=()
     local chunk_keys=()
     
-    # Look for chunks with pattern key._0, key._1, ..., key._9
-    for chunk_index in {0..9}; do
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for chunk_index in {0..29}; do
         local chunk_key="${key}._${chunk_index}"
         local found_chunk=""
         
@@ -456,61 +456,132 @@ phase_one() {
         fi
     }
 
-    # Verify the checksum of the provisioning data (calculated from all hlvmm.data values)
-    echo "Verifying provisioning data checksum..."
-    
-    # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
-    # IMPORTANT: Only include keys with non-empty values (matching PowerShell logic)
-    declare -A data_values
-    for key in "${hlvmm_data_keys[@]}"; do
-        safe_filename=$(echo "$key" | sed 's/\./_/g')
-        value=$(read_file_safe "$decrypted_keys_dir/$safe_filename")
+    # Verify the checksum of the provisioning data with retry logic
+    verify_provisioning_checksum() {
+        local attempt=$1
+        echo "Verifying provisioning data checksum (attempt $attempt)..."
         
-        # Trim whitespace and check if non-empty (matching PowerShell [string]::IsNullOrWhiteSpace logic)
-        trimmed_value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
+        # IMPORTANT: Only include keys with non-empty values (matching PowerShell logic)
+        declare -A data_values
+        for key in "${hlvmm_data_keys[@]}"; do
+            safe_filename=$(echo "$key" | sed 's/\./_/g')
+            value=$(read_file_safe "$decrypted_keys_dir/$safe_filename")
+            
+            # Trim whitespace and check if non-empty (matching PowerShell [string]::IsNullOrWhiteSpace logic)
+            trimmed_value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            
+            # Only include in checksum if value is non-empty after trimming
+            if [[ -n "$trimmed_value" ]]; then
+                data_values["$key"]="$value"
+            fi
+        done
         
-        # Only include in checksum if value is non-empty after trimming
-        if [[ -n "$trimmed_value" ]]; then
-            data_values["$key"]="$value"
-        fi
-    done
-    
-    # Sort keys and concatenate values
-    concatenated_data=""
-    sorted_keys=($(printf '%s\n' "${!data_values[@]}" | sort))
-    
-    for key in "${sorted_keys[@]}"; do
-        if [[ -n "$concatenated_data" ]]; then
-            concatenated_data="${concatenated_data}|${data_values[$key]}"
-        else
-            concatenated_data="${data_values[$key]}"
-        fi
-    done
+        # Sort keys and concatenate values
+        concatenated_data=""
+        sorted_keys=($(printf '%s\n' "${!data_values[@]}" | sort))
+        
+        for key in "${sorted_keys[@]}"; do
+            if [[ -n "$concatenated_data" ]]; then
+                concatenated_data="${concatenated_data}|${data_values[$key]}"
+            else
+                concatenated_data="${data_values[$key]}"
+            fi
+        done
 
-    # Calculate checksum and encode as Base64 (to match Windows version)
-    # Use a more explicit approach to avoid encoding issues
-    temp_data_file="/tmp/checksum_data"
-    printf '%s' "$concatenated_data" > "$temp_data_file"
-    
-    # Calculate SHA256 hash
-    hash_hex=$(sha256sum "$temp_data_file" | awk '{print $1}')
-    
-    # Convert hex to binary and then to Base64
-    calculated_checksum=$(echo "$hash_hex" | xxd -r -p | base64 -w 0)
-    
-    # Clean up temp file
-    rm -f "$temp_data_file"
-    
-    published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
+        # Calculate checksum and encode as Base64 (to match Windows version)
+        # Use a more explicit approach to avoid encoding issues
+        temp_data_file="/tmp/checksum_data_${attempt}"
+        printf '%s' "$concatenated_data" > "$temp_data_file"
+        
+        # Calculate SHA256 hash
+        hash_hex=$(sha256sum "$temp_data_file" | awk '{print $1}')
+        
+        # Convert hex to binary and then to Base64
+        calculated_checksum=$(echo "$hash_hex" | xxd -r -p | base64 -w 0)
+        
+        # Clean up temp file
+        rm -f "$temp_data_file"
+        
+        published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
 
-    if [[ "$calculated_checksum" != "$published_checksum" ]]; then
-        echo "ERROR: Checksum verification failed!"
-        echo "Expected: $published_checksum"
-        echo "Got:      $calculated_checksum"
-        return 1
+        if [[ "$calculated_checksum" != "$published_checksum" ]]; then
+            echo "ERROR: Checksum verification failed on attempt $attempt!"
+            echo "Expected: $published_checksum"
+            echo "Got:      $calculated_checksum"
+            return 1
+        fi
+
+        echo "Checksum verification succeeded on attempt $attempt!"
+        return 0
+    }
+
+    # Try checksum verification with retry logic
+    if ! verify_provisioning_checksum 1; then
+        echo "Initial checksum verification failed. Waiting 30 seconds before retrying..."
+        sleep 30
+        
+        # Re-read and re-decrypt all values before retry
+        echo "Re-reading and re-decrypting all provisioning data for retry..."
+        
+        # Clean up previous decryption attempts
+        rm -rf "$decrypted_keys_dir"
+        mkdir -p "$decrypted_keys_dir"
+        
+        # Re-decrypt all keys
+        for key in "${hlvmm_data_keys[@]}"; do
+            encrypted_value=$(read_hyperv_kvp "$key")
+            safe_filename=$(echo "$key" | sed 's/\./_/g')
+            if [[ -n "$encrypted_value" ]]; then
+                # Use temporary files to handle binary data properly and avoid shell variable issues
+                temp_encrypted="/tmp/encrypted_retry_$safe_filename"
+                temp_iv="/tmp/iv_retry_$safe_filename"
+                temp_ciphertext="/tmp/ciphertext_retry_$safe_filename"
+                
+                # Decode base64 to temporary file
+                echo "$encrypted_value" | base64 -d > "$temp_encrypted"
+                
+                # Check minimum size
+                encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
+                if [[ $encrypted_size -lt 16 ]]; then
+                    echo "ERROR: Invalid encrypted data for $key on retry (size: $encrypted_size bytes)"
+                    touch "$decrypted_keys_dir/$safe_filename"
+                    rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+                    continue
+                fi
+                
+                # Extract IV (first 16 bytes) and ciphertext using dd
+                dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
+                dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
+                
+                # Convert IV to hex
+                iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
+                
+                # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
+                if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
+                    echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
+                    echo "Successfully re-decrypted $key -> $safe_filename"
+                elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
+                    echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
+                    echo "Successfully re-decrypted $key -> $safe_filename (with nopad)"
+                else
+                    echo "ERROR: Failed to re-decrypt value for $key on retry"
+                    touch "$decrypted_keys_dir/$safe_filename"
+                fi
+                
+                # Clean up temporary files
+                rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+            else
+                touch "$decrypted_keys_dir/$safe_filename"
+            fi
+        done
+        
+        # Retry checksum verification
+        if ! verify_provisioning_checksum 2; then
+            echo "FATAL: Checksum verification failed after retry. Aborting provisioning."
+            return 1
+        fi
     fi
-
-    echo "Checksum verification succeeded!"
 
     # Configure local admin account if credentials are provided and non-empty
     local_admin_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_uid" | tr -d '\0\r\n' | xargs)

@@ -247,8 +247,8 @@ function Get-VMKeyValuePair {
     # Get all KVP items from the VM
     $allKvpItems = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems
     
-    # Look for chunks with pattern Name._0, Name._1, ..., Name._9
-    for ($chunkIndex = 0; $chunkIndex -le 9; $chunkIndex++) {
+    # Look for chunks with pattern Name._0, Name._1, ..., Name._29
+    for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
         $chunkKey = "$Name._$chunkIndex"
         
         $chunkResult = $allKvpItems | % { `
@@ -311,8 +311,8 @@ function Publish-KvpEncryptedValue {
         Write-Host "VERBOSE SSH DEBUG: AES key length: $($AesKey.Length)"
     }
 
-    # Check if value needs chunking (longer than 200 characters)
-    if ($Value.Length -le 200) {
+    # Check if value needs chunking (longer than 100 characters)
+    if ($Value.Length -le 100) {
         if ($Key -like "*ansible_ssh_key*") {
             Write-Host "VERBOSE SSH DEBUG: Value is short enough, no chunking needed"
         }
@@ -363,31 +363,31 @@ function Publish-KvpEncryptedValue {
     }
     else {
         # Value needs chunking
-        Write-Host "Value for key '$Key' is $($Value.Length) characters, chunking into 200-character pieces..."
+        Write-Host "Value for key '$Key' is $($Value.Length) characters, chunking into 100-character pieces..."
         
         if ($Key -like "*ansible_ssh_key*") {
             Write-Host "VERBOSE SSH DEBUG: Starting chunking process"
         }
         
         # Calculate number of chunks needed
-        $chunkCount = [Math]::Ceiling($Value.Length / 200.0)
+        $chunkCount = [Math]::Ceiling($Value.Length / 100.0)
         
         if ($Key -like "*ansible_ssh_key*") {
             Write-Host "VERBOSE SSH DEBUG: Calculated chunk count: $chunkCount"
         }
         
-        # Validate chunk count (max 10 chunks = 2000 characters)
-        if ($chunkCount -gt 10) {
+        # Validate chunk count (max 30 chunks = 3000 characters)
+        if ($chunkCount -gt 30) {
             if ($Key -like "*ansible_ssh_key*") {
                 Write-Host "VERBOSE SSH DEBUG: ERROR - too many chunks needed: $chunkCount"
             }
-            throw "Value for key '$Key' is too long ($($Value.Length) characters). Maximum supported length is 2000 characters (10 chunks of 200 characters each)."
+            throw "Value for key '$Key' is too long ($($Value.Length) characters). Maximum supported length is 3000 characters (30 chunks of 100 characters each)."
         }
         
         # Split value into chunks and encrypt each separately
         for ($i = 0; $i -lt $chunkCount; $i++) {
-            $startIndex = $i * 200
-            $chunkLength = [Math]::Min(200, $Value.Length - $startIndex)
+            $startIndex = $i * 100
+            $chunkLength = [Math]::Min(100, $Value.Length - $startIndex)
             $chunk = $Value.Substring($startIndex, $chunkLength)
             $chunkKey = "$Key._$i"
             
@@ -422,7 +422,7 @@ function Publish-KvpEncryptedValue {
             }
             catch {
                 if ($Key -like "*ansible_ssh_key*") {
-                    Write-Host "VERBOSE SSH DEBUG: ERROR encrypting chunk $i: $_"
+                    Write-Host "VERBOSE SSH DEBUG: ERROR encrypting chunk $i : $_"
                 }
                 throw "Failed to encrypt chunk $i for key '$Key': $_"
             }
@@ -442,7 +442,7 @@ function Publish-KvpEncryptedValue {
             }
             catch {
                 if ($Key -like "*ansible_ssh_key*") {
-                    Write-Host "VERBOSE SSH DEBUG: ERROR publishing chunk $i: $_"
+                    Write-Host "VERBOSE SSH DEBUG: ERROR publishing chunk $i : $_"
                     Write-Host "VERBOSE SSH DEBUG: Failed chunk key: '$chunkKey'"
                     Write-Host "VERBOSE SSH DEBUG: Failed chunk encrypted length: $($encryptedChunk.Length)"
                 }
@@ -711,6 +711,10 @@ foreach ($item in $dataKeysForChecksum) {
     }
 }
 
+# Wait 30 seconds before signaling completion to ensure all chunks are properly published
+Write-Host "Waiting 30 seconds before signaling provisioning data publication completion..."
+Start-Sleep -Seconds 30
+
 # Publish the host provisioning system state to the KVP
 try {
     Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "provisioningdatapublished"
@@ -737,7 +741,7 @@ try {
         
         # Try to find individual chunks
         Write-Host "VERBOSE SSH DEBUG: Checking for individual SSH key chunks..."
-        for ($i = 0; $i -le 9; $i++) {
+        for ($i = 0; $i -le 29; $i++) {
             $chunkKey = "hlvmm.data.ansible_ssh_key._$i"
             $chunk = Get-VMKeyValuePair -VMName $GuestHostName -Name $chunkKey
             if ($chunk) {
