@@ -47,13 +47,13 @@
       set_fact:
         effective_cnf_ansible_ssh_user: >-
           {%- if use_default_ansible_creds is defined and use_default_ansible_creds == "Yes" -%}
-          {{ default_cnf_ansible_ssh_user }}
+          {{ default_ansible_ssh_user }}
           {%- else -%}
           {{ cnf_ansible_ssh_user | default('') }}
           {%- endif -%}
         effective_cnf_ansible_ssh_key: >-
           {%- if use_default_ansible_creds is defined and use_default_ansible_creds == "Yes" -%}
-          {{ default_cnf_ansible_ssh_key }}
+          {{ default_ansible_ssh_key }}
           {%- else -%}
           {{ cnf_ansible_ssh_key | default('') }}
           {%- endif -%}
