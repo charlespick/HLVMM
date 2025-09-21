@@ -116,8 +116,8 @@ $mockDecryptedChunks = @{}
 $chunkKeys | ForEach-Object {
     # For this demo, we'll extract the original chunks from our SSH key
     $chunkIndex = [int]($_ -split '\._')[-1]
-    $startPos = $chunkIndex * 200
-    $endPos = [Math]::Min($startPos + 200, $sshKey.Length)
+    $startPos = $chunkIndex * 100  # Use correct chunk size of 100 characters
+    $endPos = [Math]::Min($startPos + 100, $sshKey.Length)
     $originalChunk = $sshKey.Substring($startPos, $endPos - $startPos)
     $mockDecryptedChunks[$chunkIndex] = $originalChunk
     Write-Host "  Chunk $chunkIndex (decrypted): $($originalChunk.Length) chars - '$($originalChunk.Substring(0, [Math]::Min(30, $originalChunk.Length)))...'"

@@ -22,8 +22,8 @@ function Read-HyperVKvp {
     $chunks = @{}
     $chunkKeys = @()
     
-    # Look for chunks with pattern key._0, key._1, ..., key._9
-    for ($chunkIndex = 0; $chunkIndex -le 9; $chunkIndex++) {
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
         $chunkKey = "$Key._$chunkIndex"
         try {
             $chunkValue = (Get-ItemProperty -Path $regPath -Name $chunkKey -ErrorAction SilentlyContinue).$chunkKey

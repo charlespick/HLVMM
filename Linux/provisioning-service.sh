@@ -576,7 +576,12 @@ phase_one() {
         declare -A data_values
         for key in "${hlvmm_data_keys[@]}"; do
             safe_filename=$(echo "$key" | sed 's/\./_/g')
-            value=$(read_file_safe "$decrypted_keys_dir/$safe_filename")
+            
+            # Use temp file to avoid null-byte command substitution issues
+            temp_value_file="/tmp/checksum_value_$$"
+            read_file_safe "$decrypted_keys_dir/$safe_filename" > "$temp_value_file"
+            value=$(cat "$temp_value_file")
+            rm -f "$temp_value_file"
             
             # Trim whitespace and check if non-empty (matching PowerShell [string]::IsNullOrWhiteSpace logic)
             trimmed_value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
