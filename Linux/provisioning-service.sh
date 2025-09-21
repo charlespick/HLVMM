@@ -347,34 +347,119 @@ phase_one() {
     
     echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
 
-    # Get all hlvmm.data keys dynamically instead of using hardcoded list
-    # Exclude chunked keys (those ending with ._[0-9]) from the main list
-    hlvmm_data_keys=()
-    local kvp_file="/var/lib/hyperv/.kvp_pool_0"
-    
-    if [[ -f "$kvp_file" ]]; then
+    # Function to debug print ALL keys in KVP
+    debug_print_all_kvp_keys() {
+        local attempt_number=$1
+        local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+        
+        echo "=== DEBUG: ALL KVP KEYS (Attempt $attempt_number) ==="
+        
+        if [[ ! -f "$kvp_file" ]]; then
+            echo "DEBUG: KVP file not found at $kvp_file"
+            return
+        fi
+        
         local nb=$(wc -c < "$kvp_file")
         local nkv=$(( nb / (512+2048) ))
+        
+        echo "DEBUG: KVP file size: $nb bytes, calculated entries: $nkv"
+        
+        local all_keys=()
+        local hlvmm_keys=()
+        local hlvmm_data_keys=()
+        local hlvmm_chunked_keys=()
+        local other_keys=()
         
         for n in $(seq 0 $(( $nkv - 1 )) ); do
             local offset=$(( $n * (512 + 2048) ))
             local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
-            if [[ "$k" == hlvmm.data.* ]]; then
-                # Exclude chunked keys (ending with ._[0-9]) from the main list
-                # These will be automatically reconstructed by read_hyperv_kvp
-                if [[ ! "$k" =~ \._[0-9]$ ]]; then
-                    hlvmm_data_keys+=("$k")
+            
+            # Skip empty keys
+            if [[ -n "$k" ]]; then
+                all_keys+=("$k")
+                
+                if [[ "$k" == hlvmm.* ]]; then
+                    hlvmm_keys+=("$k")
+                    
+                    if [[ "$k" == hlvmm.data.* ]]; then
+                        if [[ "$k" =~ \._[0-9]+$ ]]; then
+                            hlvmm_chunked_keys+=("$k")
+                        else
+                            hlvmm_data_keys+=("$k")
+                        fi
+                    fi
+                else
+                    other_keys+=("$k")
                 fi
             fi
         done
-    fi
+        
+        echo "DEBUG: Total keys found: ${#all_keys[@]}"
+        echo "DEBUG: HLVMM keys found: ${#hlvmm_keys[@]}"
+        echo "DEBUG: HLVMM data keys (non-chunked): ${#hlvmm_data_keys[@]}"
+        echo "DEBUG: HLVMM chunked keys: ${#hlvmm_chunked_keys[@]}"
+        echo "DEBUG: Other keys: ${#other_keys[@]}"
+        
+        echo ""
+        echo "DEBUG: ALL KEYS LISTING:"
+        for key in "${all_keys[@]}"; do
+            if [[ "$key" == hlvmm.data.* ]]; then
+                if [[ "$key" =~ \._[0-9]+$ ]]; then
+                    echo "  [HLVMM-DATA-CHUNK] $key"
+                else
+                    echo "  [HLVMM-DATA] $key"
+                fi
+            elif [[ "$key" == hlvmm.* ]]; then
+                echo "  [HLVMM-OTHER] $key"
+            else
+                echo "  [OTHER] $key"
+            fi
+        done
+        echo "=== END DEBUG: ALL KVP KEYS ==="
+        echo ""
+    }
+    
+    # Function to scan for hlvmm.data keys (excluding chunked ones)
+    scan_hlvmm_data_keys() {
+        local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+        local keys=()
+        
+        if [[ -f "$kvp_file" ]]; then
+            local nb=$(wc -c < "$kvp_file")
+            local nkv=$(( nb / (512+2048) ))
+            
+            for n in $(seq 0 $(( $nkv - 1 )) ); do
+                local offset=$(( $n * (512 + 2048) ))
+                local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+                if [[ "$k" == hlvmm.data.* ]]; then
+                    # Exclude chunked keys (ending with ._[0-9]) from the main list
+                    # These will be automatically reconstructed by read_hyperv_kvp
+                    if [[ ! "$k" =~ \._[0-9]+$ ]]; then
+                        keys+=("$k")
+                    fi
+                fi
+            done
+        fi
+        
+        printf '%s\n' "${keys[@]}"
+    }
+
+    # Initial scan and debug for attempt 1
+    debug_print_all_kvp_keys 1
+    
+    # Get all hlvmm.data keys dynamically instead of using hardcoded list
+    echo "Scanning for hlvmm.data keys (initial scan)..."
+    readarray -t hlvmm_data_keys < <(scan_hlvmm_data_keys)
     
     if [[ ${#hlvmm_data_keys[@]} -eq 0 ]]; then
         echo "ERROR: No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
         return 1
     fi
     
-    echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt"
+    echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt (initial scan)"
+    for key in "${hlvmm_data_keys[@]}"; do
+        echo "  - $key"
+    done
 
     # Directory to store decrypted keys
     decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
@@ -397,12 +482,14 @@ phase_one() {
     rm -f "$temp_aes_key"
 
     # Save each decrypted key to a file using the actual KVP key name
-    echo "Decrypting provisioning data keys..."
+    echo "Decrypting provisioning data keys (initial attempt)..."
     for key in "${hlvmm_data_keys[@]}"; do
+        echo "  Processing key: $key"
         encrypted_value=$(read_hyperv_kvp "$key")
         # Create safe filename by replacing dots with underscores  
         safe_filename=$(echo "$key" | sed 's/\./_/g')
         if [[ -n "$encrypted_value" ]]; then
+            echo "    Retrieved encrypted value, length: ${#encrypted_value} characters"
             # Use temporary files to handle binary data properly and avoid shell variable issues
             temp_encrypted="/tmp/encrypted_$safe_filename"
             temp_iv="/tmp/iv_$safe_filename"
@@ -430,18 +517,19 @@ phase_one() {
             # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
             if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
                 echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-                echo "Successfully decrypted $key -> $safe_filename"
+                echo "    Successfully decrypted $key -> $safe_filename (length: ${#decrypted_value})"
             elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
                 echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
-                echo "Successfully decrypted $key -> $safe_filename (with nopad)"
+                echo "    Successfully decrypted $key -> $safe_filename (with nopad, length: ${#decrypted_value})"
             else
-                echo "ERROR: Failed to decrypt value for $key"
+                echo "    ERROR: Failed to decrypt value for $key"
                 touch "$decrypted_keys_dir/$safe_filename"
             fi
             
             # Clean up temporary files
             rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
         else
+            echo "    WARNING: No encrypted value found for $key"
             touch "$decrypted_keys_dir/$safe_filename"
         fi
     done
@@ -521,18 +609,36 @@ phase_one() {
         echo "Initial checksum verification failed. Waiting 30 seconds before retrying..."
         sleep 30
         
-        # Re-read and re-decrypt all values before retry
-        echo "Re-reading and re-decrypting all provisioning data for retry..."
+        # Re-scan for keys and debug print everything
+        echo "Re-scanning for keys and re-decrypting all provisioning data for retry..."
+        debug_print_all_kvp_keys 2
+        
+        # Re-scan for hlvmm.data keys
+        echo "Re-scanning for hlvmm.data keys (retry scan)..."
+        readarray -t hlvmm_data_keys < <(scan_hlvmm_data_keys)
+        
+        if [[ ${#hlvmm_data_keys[@]} -eq 0 ]]; then
+            echo "ERROR: No hlvmm.data keys found in KVP on retry. Cannot proceed with provisioning."
+            return 1
+        fi
+        
+        echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt (retry scan)"
+        for key in "${hlvmm_data_keys[@]}"; do
+            echo "  - $key"
+        done
         
         # Clean up previous decryption attempts
         rm -rf "$decrypted_keys_dir"
         mkdir -p "$decrypted_keys_dir"
         
         # Re-decrypt all keys
+        echo "Decrypting provisioning data keys (retry attempt)..."
         for key in "${hlvmm_data_keys[@]}"; do
+            echo "  Processing key: $key (retry)"
             encrypted_value=$(read_hyperv_kvp "$key")
             safe_filename=$(echo "$key" | sed 's/\./_/g')
             if [[ -n "$encrypted_value" ]]; then
+                echo "    Retrieved encrypted value, length: ${#encrypted_value} characters (retry)"
                 # Use temporary files to handle binary data properly and avoid shell variable issues
                 temp_encrypted="/tmp/encrypted_retry_$safe_filename"
                 temp_iv="/tmp/iv_retry_$safe_filename"
@@ -544,7 +650,7 @@ phase_one() {
                 # Check minimum size
                 encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
                 if [[ $encrypted_size -lt 16 ]]; then
-                    echo "ERROR: Invalid encrypted data for $key on retry (size: $encrypted_size bytes)"
+                    echo "    ERROR: Invalid encrypted data for $key on retry (size: $encrypted_size bytes)"
                     touch "$decrypted_keys_dir/$safe_filename"
                     rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
                     continue
@@ -560,18 +666,19 @@ phase_one() {
                 # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
                 if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
                     echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-                    echo "Successfully re-decrypted $key -> $safe_filename"
+                    echo "    Successfully re-decrypted $key -> $safe_filename (length: ${#decrypted_value}, retry)"
                 elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
                     echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
-                    echo "Successfully re-decrypted $key -> $safe_filename (with nopad)"
+                    echo "    Successfully re-decrypted $key -> $safe_filename (with nopad, length: ${#decrypted_value}, retry)"
                 else
-                    echo "ERROR: Failed to re-decrypt value for $key on retry"
+                    echo "    ERROR: Failed to re-decrypt value for $key on retry"
                     touch "$decrypted_keys_dir/$safe_filename"
                 fi
                 
                 # Clean up temporary files
                 rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
             else
+                echo "    WARNING: No encrypted value found for $key (retry)"
                 touch "$decrypted_keys_dir/$safe_filename"
             fi
         done
