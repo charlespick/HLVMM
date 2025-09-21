@@ -17,6 +17,133 @@ if ! systemctl is-active --quiet hv-kvp-daemon && ! systemctl is-active --quiet 
     fi
 fi
 
+# Function to read and decrypt a key from Hyper-V KVP with proper chunking support
+read_hyperv_kvp_with_decryption() {
+    local key="$1"
+    local aes_key_hex="$2"
+    local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+    
+    if [[ ! -f "$kvp_file" ]]; then
+        return 1
+    fi
+    
+    local nb=$(wc -c < "$kvp_file")
+    local nkv=$(( nb / (512+2048) ))
+    
+    # First try to read the key directly (non-chunked case)
+    for n in $(seq 0 $(( $nkv - 1 )) ); do
+        local offset=$(( $n * (512 + 2048) ))
+        local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+        if [[ "$k" == "$key" ]]; then
+            local encrypted_value=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+            
+            # Decrypt the single value
+            if decrypt_single_value "$encrypted_value" "$aes_key_hex"; then
+                return 0
+            else
+                return 1
+            fi
+        fi
+    done
+    
+    # If direct key not found, check if this is a chunked key (look for key._0, key._1, etc.)
+    local -A chunks
+    local chunk_keys=()
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for chunk_index in {0..29}; do
+        local chunk_key="${key}._${chunk_index}"
+        local found_chunk=""
+        
+        for n in $(seq 0 $(( $nkv - 1 )) ); do
+            local offset=$(( $n * (512 + 2048) ))
+            local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+            if [[ "$k" == "$chunk_key" ]]; then
+                found_chunk=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+                break
+            fi
+        done
+        
+        if [[ -n "$found_chunk" ]]; then
+            chunks[$chunk_index]="$found_chunk"
+            chunk_keys+=("$chunk_key")
+        else
+            # No more chunks found, stop looking
+            break
+        fi
+    done
+    
+    # If we found chunks, decrypt each chunk individually and reconstruct
+    if [[ ${#chunks[@]} -gt 0 ]]; then
+        local reconstructed_plaintext=""
+        
+        # Decrypt and combine chunks in order (0, 1, 2, ...)
+        for chunk_index in $(seq 0 $(( ${#chunks[@]} - 1 )) ); do
+            if [[ -n "${chunks[$chunk_index]}" ]]; then
+                local temp_decrypted="/tmp/decrypted_chunk_${chunk_index}_$$"
+                
+                if decrypt_single_value "${chunks[$chunk_index]}" "$aes_key_hex" "$temp_decrypted"; then
+                    # Append this chunk's plaintext to the result
+                    reconstructed_plaintext="${reconstructed_plaintext}$(cat "$temp_decrypted")"
+                    rm -f "$temp_decrypted"
+                else
+                    echo "ERROR: Failed to decrypt chunk $chunk_index of key $key" >&2
+                    rm -f "$temp_decrypted"
+                    return 1
+                fi
+            fi
+        done
+        
+        # Output the reconstructed plaintext
+        echo "$reconstructed_plaintext"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Helper function to decrypt a single encrypted value 
+decrypt_single_value() {
+    local encrypted_value="$1"
+    local aes_key_hex="$2"
+    local output_file="${3:-/dev/stdout}"
+    
+    # Use temporary files to handle binary data properly
+    local temp_encrypted="/tmp/encrypted_single_$$"
+    local temp_iv="/tmp/iv_single_$$"
+    local temp_ciphertext="/tmp/ciphertext_single_$$"
+    
+    # Decode base64 to temporary file
+    echo "$encrypted_value" | base64 -d > "$temp_encrypted"
+    
+    # Check minimum size
+    local encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
+    if [[ $encrypted_size -lt 16 ]]; then
+        echo "ERROR: Invalid encrypted data (size: $encrypted_size bytes)" >&2
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 1
+    fi
+    
+    # Extract IV (first 16 bytes) and ciphertext
+    dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
+    dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
+    
+    # Convert IV to hex
+    local iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
+    
+    # Decrypt using AES-256-CBC
+    if openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" -out "$output_file" 2>/dev/null; then
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 0
+    elif openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//' > "$output_file"; then
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 0
+    else
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 1
+    fi
+}
+
 # Function to read a key from Hyper-V KVP using the correct pool and format
 # Automatically handles chunked values (keys ending with ._0, ._1, etc.)
 read_hyperv_kvp() {
@@ -497,61 +624,20 @@ phase_one() {
     rm -f "$temp_aes_key"
 
     # Save each decrypted key to a file using the actual KVP key name
-    echo "Decrypting provisioning data keys (initial attempt)..."
+    echo "Decrypting provisioning data keys..."
     for key in "${hlvmm_data_keys[@]}"; do
         echo "  Processing key: $key"
-        encrypted_value=$(read_hyperv_kvp "$key")
+        
         # Create safe filename by replacing dots with underscores  
         safe_filename=$(echo "$key" | sed 's/\./_/g')
-        if [[ -n "$encrypted_value" ]]; then
-            echo "    Retrieved encrypted value, length: ${#encrypted_value} characters"
-            # Use temporary files to handle binary data properly and avoid shell variable issues
-            temp_encrypted="/tmp/encrypted_$safe_filename"
-            temp_iv="/tmp/iv_$safe_filename"
-            temp_ciphertext="/tmp/ciphertext_$safe_filename"
-            
-            # Decode base64 to temporary file
-            echo "$encrypted_value" | base64 -d > "$temp_encrypted"
-            
-            # Check minimum size
-            encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
-            if [[ $encrypted_size -lt 16 ]]; then
-                echo "ERROR: Invalid encrypted data for $key (size: $encrypted_size bytes)"
-                touch "$decrypted_keys_dir/$safe_filename"
-                rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
-                continue
-            fi
-            
-            # Extract IV (first 16 bytes) and ciphertext using dd
-            dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
-            dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
-            
-            # Convert IV to hex
-            iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
-            
-            # Use temporary file for decrypted output to avoid null byte issues in command substitution
-            temp_decrypted="/tmp/decrypted_$safe_filename"
-            
-            # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
-            if openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
-                # Copy decrypted content to final location
-                cp "$temp_decrypted" "$decrypted_keys_dir/$safe_filename"
-                decrypted_length=$(wc -c < "$temp_decrypted")
-                echo "    Successfully decrypted $key -> $safe_filename (length: $decrypted_length)"
-            elif openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
-                # Remove trailing null bytes and copy to final location
-                sed 's/\x00*$//' "$temp_decrypted" > "$decrypted_keys_dir/$safe_filename"
-                decrypted_length=$(wc -c < "$decrypted_keys_dir/$safe_filename")
-                echo "    Successfully decrypted $key -> $safe_filename (with nopad, length: $decrypted_length)"
-            else
-                echo "    ERROR: Failed to decrypt value for $key"
-                touch "$decrypted_keys_dir/$safe_filename"
-            fi
-            
-            # Clean up temporary files
-            rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext" "$temp_decrypted"
+        
+        # Use the new decryption function that handles chunking properly
+        if decrypted_value=$(read_hyperv_kvp_with_decryption "$key" "$aes_key_hex"); then
+            echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
+            decrypted_length=${#decrypted_value}
+            echo "    Successfully decrypted $key -> $safe_filename (length: $decrypted_length)"
         else
-            echo "    WARNING: No encrypted value found for $key"
+            echo "    ERROR: Failed to decrypt value for $key"
             touch "$decrypted_keys_dir/$safe_filename"
         fi
     done
@@ -662,57 +748,16 @@ phase_one() {
         echo "Decrypting provisioning data keys (retry attempt)..."
         for key in "${hlvmm_data_keys[@]}"; do
             echo "  Processing key: $key (retry)"
-            encrypted_value=$(read_hyperv_kvp "$key")
+            
             safe_filename=$(echo "$key" | sed 's/\./_/g')
-            if [[ -n "$encrypted_value" ]]; then
-                echo "    Retrieved encrypted value, length: ${#encrypted_value} characters (retry)"
-                # Use temporary files to handle binary data properly and avoid shell variable issues
-                temp_encrypted="/tmp/encrypted_retry_$safe_filename"
-                temp_iv="/tmp/iv_retry_$safe_filename"
-                temp_ciphertext="/tmp/ciphertext_retry_$safe_filename"
-                
-                # Decode base64 to temporary file
-                echo "$encrypted_value" | base64 -d > "$temp_encrypted"
-                
-                # Check minimum size
-                encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
-                if [[ $encrypted_size -lt 16 ]]; then
-                    echo "    ERROR: Invalid encrypted data for $key on retry (size: $encrypted_size bytes)"
-                    touch "$decrypted_keys_dir/$safe_filename"
-                    rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
-                    continue
-                fi
-                
-                # Extract IV (first 16 bytes) and ciphertext using dd
-                dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
-                dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
-                
-                # Convert IV to hex
-                iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
-                
-                # Use temporary file for decrypted output to avoid null byte issues in command substitution
-                temp_decrypted="/tmp/decrypted_retry_$safe_filename"
-                
-                # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
-                if openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
-                    # Copy decrypted content to final location
-                    cp "$temp_decrypted" "$decrypted_keys_dir/$safe_filename"
-                    decrypted_length=$(wc -c < "$temp_decrypted")
-                    echo "    Successfully re-decrypted $key -> $safe_filename (length: $decrypted_length, retry)"
-                elif openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
-                    # Remove trailing null bytes and copy to final location
-                    sed 's/\x00*$//' "$temp_decrypted" > "$decrypted_keys_dir/$safe_filename"
-                    decrypted_length=$(wc -c < "$decrypted_keys_dir/$safe_filename")
-                    echo "    Successfully re-decrypted $key -> $safe_filename (with nopad, length: $decrypted_length, retry)"
-                else
-                    echo "    ERROR: Failed to re-decrypt value for $key on retry"
-                    touch "$decrypted_keys_dir/$safe_filename"
-                fi
-                
-                # Clean up temporary files
-                rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext" "$temp_decrypted"
+            
+            # Use the new decryption function that handles chunking properly
+            if decrypted_value=$(read_hyperv_kvp_with_decryption "$key" "$aes_key_hex"); then
+                echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
+                decrypted_length=${#decrypted_value}
+                echo "    Successfully re-decrypted $key -> $safe_filename (length: $decrypted_length, retry)"
             else
-                echo "    WARNING: No encrypted value found for $key (retry)"
+                echo "    ERROR: Failed to re-decrypt value for $key on retry"
                 touch "$decrypted_keys_dir/$safe_filename"
             fi
         done
