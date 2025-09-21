@@ -40,6 +40,13 @@ if ($GuestDomainJoinTarget -or $GuestDomainJoinUid -or $GuestDomainJoinPw -or $G
     }
 }
 
+# Validate Ansible SSH settings if any Ansible SSH-related parameter is provided
+if ($AnsibleSshUser -or $AnsibleSshKey) {
+    if (-not $AnsibleSshUser -or -not $AnsibleSshKey) {
+        throw "Both Ansible SSH settings (AnsibleSshUser, AnsibleSshKey) must be provided if any Ansible SSH setting is specified."
+    }
+}
+
 function Set-VMKeyValuePair {
     param (
         [Parameter(Mandatory = $true)]
@@ -289,6 +296,8 @@ $provisioningDataItems = @(
     @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
     @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
     @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_ou"; Value = $GuestDomainJoinOU }
+    @{ ParamName = "AnsibleSshUser"; KvpKey = "hlvmm.data.ansible_ssh_user"; Value = $AnsibleSshUser }
+    @{ ParamName = "AnsibleSshKey"; KvpKey = "hlvmm.data.ansible_ssh_key"; Value = $AnsibleSshKey }
     @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
     @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
     @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }

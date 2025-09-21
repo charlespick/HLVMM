@@ -17,5 +17,7 @@ hlvmm.data       host        guest_domain_join_target               domain to jo
 hlvmm.data       host        guest_domain_join_uid                  username for domain join
 hlvmm.data       host        guest_domain_join_pw                   password for domain join
 hlvmm.data       host        guest_domain_join_ou                   organizational unit for domain join
+hlvmm.data       host        ansible_ssh_user                       Ansible SSH username for passwordless sudo access
+hlvmm.data       host        ansible_ssh_key                        Ansible SSH public key for passwordless authentication
 hlvmm.data       host        guest_la_uid                           local administrator username
 hlvmm.data       host        guest_la_pw                            local administrator password
