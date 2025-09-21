@@ -27,12 +27,12 @@ if (-not $GuestLaPw) {
 $GuestDomainJoinPw = $env:GuestDomainJoinPw
 
 # Validate IP settings if any IP-related parameter is provided
-# Check for non-null and non-empty values
-$hasIpAddr = $GuestV4IpAddr -and $GuestV4IpAddr.Trim() -ne ""
-$hasCidrPrefix = $GuestV4CidrPrefix -and $GuestV4CidrPrefix.Trim() -ne ""
-$hasDefaultGw = $GuestV4DefaultGw -and $GuestV4DefaultGw.Trim() -ne ""
-$hasDns1 = $GuestV4Dns1 -and $GuestV4Dns1.Trim() -ne ""
-$hasDns2 = $GuestV4Dns2 -and $GuestV4Dns2.Trim() -ne ""
+# Check for non-null and non-whitespace values
+$hasIpAddr = -not [string]::IsNullOrWhiteSpace($GuestV4IpAddr)
+$hasCidrPrefix = -not [string]::IsNullOrWhiteSpace($GuestV4CidrPrefix)
+$hasDefaultGw = -not [string]::IsNullOrWhiteSpace($GuestV4DefaultGw)
+$hasDns1 = -not [string]::IsNullOrWhiteSpace($GuestV4Dns1)
+$hasDns2 = -not [string]::IsNullOrWhiteSpace($GuestV4Dns2)
 
 if ($hasIpAddr -or $hasCidrPrefix -or $hasDefaultGw -or $hasDns1 -or $hasDns2) {
     if (-not $hasIpAddr -or -not $hasCidrPrefix -or -not $hasDefaultGw -or -not $hasDns1 -or -not $hasDns2) {
@@ -41,11 +41,11 @@ if ($hasIpAddr -or $hasCidrPrefix -or $hasDefaultGw -or $hasDns1 -or $hasDns2) {
 }
 
 # Validate domain settings if any domain-related parameter is provided
-# Check for non-null and non-empty values
-$hasDomainTarget = $GuestDomainJoinTarget -and $GuestDomainJoinTarget.Trim() -ne ""
-$hasDomainUid = $GuestDomainJoinUid -and $GuestDomainJoinUid.Trim() -ne ""
-$hasDomainPw = $GuestDomainJoinPw -and $GuestDomainJoinPw.Trim() -ne ""
-$hasDomainOU = $GuestDomainJoinOU -and $GuestDomainJoinOU.Trim() -ne ""
+# Check for non-null and non-whitespace values
+$hasDomainTarget = -not [string]::IsNullOrWhiteSpace($GuestDomainJoinTarget)
+$hasDomainUid = -not [string]::IsNullOrWhiteSpace($GuestDomainJoinUid)
+$hasDomainPw = -not [string]::IsNullOrWhiteSpace($GuestDomainJoinPw)
+$hasDomainOU = -not [string]::IsNullOrWhiteSpace($GuestDomainJoinOU)
 
 if ($hasDomainTarget -or $hasDomainUid -or $hasDomainPw -or $hasDomainOU) {
     if (-not $hasDomainTarget -or -not $hasDomainUid -or -not $hasDomainPw -or -not $hasDomainOU) {
@@ -54,9 +54,9 @@ if ($hasDomainTarget -or $hasDomainUid -or $hasDomainPw -or $hasDomainOU) {
 }
 
 # Validate Ansible SSH settings if any Ansible SSH-related parameter is provided
-# Check for non-null and non-empty values
-$hasSshUser = $AnsibleSshUser -and $AnsibleSshUser.Trim() -ne ""
-$hasSshKey = $AnsibleSshKey -and $AnsibleSshKey.Trim() -ne ""
+# Check for non-null and non-whitespace values
+$hasSshUser = -not [string]::IsNullOrWhiteSpace($AnsibleSshUser)
+$hasSshKey = -not [string]::IsNullOrWhiteSpace($AnsibleSshKey)
 
 if ($hasSshUser -or $hasSshKey) {
     if (-not $hasSshUser -or -not $hasSshKey) {

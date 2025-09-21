@@ -146,8 +146,7 @@
         {% if effective_cnf_ansible_ssh_key is defined and effective_cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey {{ effective_cnf_ansible_ssh_key }}{% endif %}
       environment:
         GuestLaPw: "{{ guest_la_pw }}"
-{% if effective_guest_domain_joinpw is defined and effective_guest_domain_joinpw|length > 0 %}        GuestDomainJoinPw: "{{ effective_guest_domain_joinpw }}"
-{% endif %}
+        GuestDomainJoinPw: "{{ effective_guest_domain_joinpw | default('') }}"
       # no_log: true
 
     - block:
