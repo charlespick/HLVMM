@@ -529,20 +529,27 @@ phase_one() {
             # Convert IV to hex
             iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
             
+            # Use temporary file for decrypted output to avoid null byte issues in command substitution
+            temp_decrypted="/tmp/decrypted_$safe_filename"
+            
             # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
-            if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
-                echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-                echo "    Successfully decrypted $key -> $safe_filename (length: ${#decrypted_value})"
-            elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
-                echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
-                echo "    Successfully decrypted $key -> $safe_filename (with nopad, length: ${#decrypted_value})"
+            if openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
+                # Copy decrypted content to final location
+                cp "$temp_decrypted" "$decrypted_keys_dir/$safe_filename"
+                decrypted_length=$(wc -c < "$temp_decrypted")
+                echo "    Successfully decrypted $key -> $safe_filename (length: $decrypted_length)"
+            elif openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
+                # Remove trailing null bytes and copy to final location
+                sed 's/\x00*$//' "$temp_decrypted" > "$decrypted_keys_dir/$safe_filename"
+                decrypted_length=$(wc -c < "$decrypted_keys_dir/$safe_filename")
+                echo "    Successfully decrypted $key -> $safe_filename (with nopad, length: $decrypted_length)"
             else
                 echo "    ERROR: Failed to decrypt value for $key"
                 touch "$decrypted_keys_dir/$safe_filename"
             fi
             
             # Clean up temporary files
-            rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+            rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext" "$temp_decrypted"
         else
             echo "    WARNING: No encrypted value found for $key"
             touch "$decrypted_keys_dir/$safe_filename"
@@ -678,20 +685,27 @@ phase_one() {
                 # Convert IV to hex
                 iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
                 
+                # Use temporary file for decrypted output to avoid null byte issues in command substitution
+                temp_decrypted="/tmp/decrypted_retry_$safe_filename"
+                
                 # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
-                if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
-                    echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-                    echo "    Successfully re-decrypted $key -> $safe_filename (length: ${#decrypted_value}, retry)"
-                elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
-                    echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
-                    echo "    Successfully re-decrypted $key -> $safe_filename (with nopad, length: ${#decrypted_value}, retry)"
+                if openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
+                    # Copy decrypted content to final location
+                    cp "$temp_decrypted" "$decrypted_keys_dir/$safe_filename"
+                    decrypted_length=$(wc -c < "$temp_decrypted")
+                    echo "    Successfully re-decrypted $key -> $safe_filename (length: $decrypted_length, retry)"
+                elif openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" -out "$temp_decrypted" 2>/dev/null; then
+                    # Remove trailing null bytes and copy to final location
+                    sed 's/\x00*$//' "$temp_decrypted" > "$decrypted_keys_dir/$safe_filename"
+                    decrypted_length=$(wc -c < "$decrypted_keys_dir/$safe_filename")
+                    echo "    Successfully re-decrypted $key -> $safe_filename (with nopad, length: $decrypted_length, retry)"
                 else
                     echo "    ERROR: Failed to re-decrypt value for $key on retry"
                     touch "$decrypted_keys_dir/$safe_filename"
                 fi
                 
                 # Clean up temporary files
-                rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+                rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext" "$temp_decrypted"
             else
                 echo "    WARNING: No encrypted value found for $key (retry)"
                 touch "$decrypted_keys_dir/$safe_filename"
