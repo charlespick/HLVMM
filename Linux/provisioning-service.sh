@@ -419,24 +419,39 @@ phase_one() {
         echo ""
     }
     
-    # Function to scan for hlvmm.data keys (excluding chunked ones)
+    # Function to scan for hlvmm.data keys (including chunked base names)
     scan_hlvmm_data_keys() {
         local kvp_file="/var/lib/hyperv/.kvp_pool_0"
         local keys=()
+        local chunk_base_names=()
         
         if [[ -f "$kvp_file" ]]; then
             local nb=$(wc -c < "$kvp_file")
             local nkv=$(( nb / (512+2048) ))
             
+            # First pass: collect regular keys and identify chunk base names
             for n in $(seq 0 $(( $nkv - 1 )) ); do
                 local offset=$(( $n * (512 + 2048) ))
                 local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
                 if [[ "$k" == hlvmm.data.* ]]; then
-                    # Exclude chunked keys (ending with ._[0-9]) from the main list
-                    # These will be automatically reconstructed by read_hyperv_kvp
-                    if [[ ! "$k" =~ \._[0-9]+$ ]]; then
+                    if [[ "$k" =~ \._[0-9]+$ ]]; then
+                        # This is a chunked key, extract the base name
+                        local base_name="${k%._*}"
+                        if [[ ! " ${chunk_base_names[@]} " =~ " ${base_name} " ]]; then
+                            chunk_base_names+=("$base_name")
+                        fi
+                    else
+                        # This is a regular (non-chunked) key
                         keys+=("$k")
                     fi
+                fi
+            done
+            
+            # Second pass: add chunk base names that don't have regular keys
+            for base_name in "${chunk_base_names[@]}"; do
+                # Check if this base name already exists as a regular key
+                if [[ ! " ${keys[@]} " =~ " ${base_name} " ]]; then
+                    keys+=("$base_name")
                 fi
             done
         fi
