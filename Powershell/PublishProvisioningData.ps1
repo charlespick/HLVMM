@@ -27,22 +27,39 @@ if (-not $GuestLaPw) {
 $GuestDomainJoinPw = $env:GuestDomainJoinPw
 
 # Validate IP settings if any IP-related parameter is provided
-if ($GuestV4IpAddr -or $GuestV4CidrPrefix -or $GuestV4DefaultGw -or $GuestV4Dns1 -or $GuestV4Dns2) {
-    if (-not $GuestV4IpAddr -or -not $GuestV4CidrPrefix -or -not $GuestV4DefaultGw -or -not $GuestV4Dns1 -or -not $GuestV4Dns2) {
+# Check for non-null and non-empty values
+$hasIpAddr = $GuestV4IpAddr -and $GuestV4IpAddr.Trim() -ne ""
+$hasCidrPrefix = $GuestV4CidrPrefix -and $GuestV4CidrPrefix.Trim() -ne ""
+$hasDefaultGw = $GuestV4DefaultGw -and $GuestV4DefaultGw.Trim() -ne ""
+$hasDns1 = $GuestV4Dns1 -and $GuestV4Dns1.Trim() -ne ""
+$hasDns2 = $GuestV4Dns2 -and $GuestV4Dns2.Trim() -ne ""
+
+if ($hasIpAddr -or $hasCidrPrefix -or $hasDefaultGw -or $hasDns1 -or $hasDns2) {
+    if (-not $hasIpAddr -or -not $hasCidrPrefix -or -not $hasDefaultGw -or -not $hasDns1 -or -not $hasDns2) {
         throw "All IP settings (GuestV4IpAddr, GuestV4CidrPrefix, GuestV4DefaultGw, GuestV4Dns1, GuestV4Dns2) must be provided if any IP setting is specified."
     }
 }
 
 # Validate domain settings if any domain-related parameter is provided
-if ($GuestDomainJoinTarget -or $GuestDomainJoinUid -or $GuestDomainJoinPw -or $GuestDomainJoinOU) {
-    if (-not $GuestDomainJoinTarget -or -not $GuestDomainJoinUid -or -not $GuestDomainJoinPw -or -not $GuestDomainJoinOU) {
+# Check for non-null and non-empty values
+$hasDomainTarget = $GuestDomainJoinTarget -and $GuestDomainJoinTarget.Trim() -ne ""
+$hasDomainUid = $GuestDomainJoinUid -and $GuestDomainJoinUid.Trim() -ne ""
+$hasDomainPw = $GuestDomainJoinPw -and $GuestDomainJoinPw.Trim() -ne ""
+$hasDomainOU = $GuestDomainJoinOU -and $GuestDomainJoinOU.Trim() -ne ""
+
+if ($hasDomainTarget -or $hasDomainUid -or $hasDomainPw -or $hasDomainOU) {
+    if (-not $hasDomainTarget -or -not $hasDomainUid -or -not $hasDomainPw -or -not $hasDomainOU) {
         throw "All domain settings (GuestDomainJoinTarget, GuestDomainJoinUid, GuestDomainJoinPw, GuestDomainJoinOU) must be provided if any domain setting is specified."
     }
 }
 
 # Validate Ansible SSH settings if any Ansible SSH-related parameter is provided
-if ($AnsibleSshUser -or $AnsibleSshKey) {
-    if (-not $AnsibleSshUser -or -not $AnsibleSshKey) {
+# Check for non-null and non-empty values
+$hasSshUser = $AnsibleSshUser -and $AnsibleSshUser.Trim() -ne ""
+$hasSshKey = $AnsibleSshKey -and $AnsibleSshKey.Trim() -ne ""
+
+if ($hasSshUser -or $hasSshKey) {
+    if (-not $hasSshUser -or -not $hasSshKey) {
         throw "Both Ansible SSH settings (AnsibleSshUser, AnsibleSshKey) must be provided if any Ansible SSH setting is specified."
     }
 }
