@@ -110,9 +110,12 @@ function Get-VMKeyValuePair {
         [Parameter(Mandatory = $true)]
         [string]$Name
     )
+    
     $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
         Msvm_ComputerSystem -Filter "ElementName='$VMName'"
-    $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
+    
+    # First try to get the key directly (non-chunked case)
+    $directResult = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
             $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
                 "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
         if ($GuestExchangeItemXml -ne $null) {
@@ -120,6 +123,56 @@ function Get-VMKeyValuePair {
                     "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
         }
     }
+    
+    if ($directResult) {
+        return $directResult
+    }
+    
+    # If direct key not found, check if this is a chunked key (look for Name._0, Name._1, etc.)
+    $chunks = @{}
+    $chunkKeys = @()
+    
+    # Get all KVP items from the VM
+    $allKvpItems = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems
+    
+    # Look for chunks with pattern Name._0, Name._1, ..., Name._9
+    for ($chunkIndex = 0; $chunkIndex -le 9; $chunkIndex++) {
+        $chunkKey = "$Name._$chunkIndex"
+        
+        $chunkResult = $allKvpItems | % { `
+                $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
+                    "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
+            if ($GuestExchangeItemXml -ne $null) {
+                $GuestExchangeItemXml.SelectSingleNode(`
+                        "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+            }
+        }
+        
+        if ($chunkResult) {
+            $chunks[$chunkIndex] = $chunkResult
+            $chunkKeys += $chunkKey
+        } else {
+            # No more chunks found, stop looking
+            break
+        }
+    }
+    
+    # If we found chunks, reconstruct the original value
+    if ($chunks.Count -gt 0) {
+        $reconstructedValue = ""
+        
+        # Combine chunks in order (0, 1, 2, ...)
+        for ($i = 0; $i -lt $chunks.Count; $i++) {
+            if ($chunks.ContainsKey($i)) {
+                $reconstructedValue += $chunks[$i]
+            }
+        }
+        
+        return $reconstructedValue
+    }
+    
+    # Key not found (neither direct nor chunked)
+    return $null
 }
 
 function Publish-KvpEncryptedValue {
