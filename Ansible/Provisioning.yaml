@@ -143,7 +143,7 @@
         {% if effective_guest_domain_joinuid is defined and effective_guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ effective_guest_domain_joinuid }}{% endif %}
         {% if effective_guest_domain_joinou is defined and effective_guest_domain_joinou|length > 0 %}-GuestDomainJoinOU {{ effective_guest_domain_joinou }}{% endif %}
         {% if effective_cnf_ansible_ssh_user is defined and effective_cnf_ansible_ssh_user|length > 0 %}-AnsibleSshUser {{ effective_cnf_ansible_ssh_user }}{% endif %}
-        {% if effective_cnf_ansible_ssh_key is defined and effective_cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey {{ effective_cnf_ansible_ssh_key }}{% endif %}
+        {% if effective_cnf_ansible_ssh_key is defined and effective_cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey "{{ effective_cnf_ansible_ssh_key }}"{% endif %}
       environment:
         GuestLaPw: "{{ guest_la_pw }}"
         GuestDomainJoinPw: "{{ effective_guest_domain_joinpw | default('') }}"
