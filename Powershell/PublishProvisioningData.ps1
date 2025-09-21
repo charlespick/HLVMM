@@ -137,34 +137,89 @@ function Publish-KvpEncryptedValue {
         [string]$AesKey
     )
 
-    # Encrypt the value using AES with random IV
-    try {
-        $aes = New-Object System.Security.Cryptography.AesManaged
-        $aes.Key = [Convert]::FromBase64String($AesKey)
-        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
-        $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
-        $aes.GenerateIV()  # Generate a random IV
+    # Check if value needs chunking (longer than 200 characters)
+    if ($Value.Length -le 200) {
+        # Value is short enough, encrypt and publish normally
+        try {
+            $aes = New-Object System.Security.Cryptography.AesManaged
+            $aes.Key = [Convert]::FromBase64String($AesKey)
+            $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+            $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+            $aes.GenerateIV()  # Generate a random IV
 
-        $iv = $aes.IV
-        $encryptor = $aes.CreateEncryptor()
+            $iv = $aes.IV
+            $encryptor = $aes.CreateEncryptor()
 
-        $valueBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
-        $encryptedBytes = $encryptor.TransformFinalBlock($valueBytes, 0, $valueBytes.Length)
+            $valueBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+            $encryptedBytes = $encryptor.TransformFinalBlock($valueBytes, 0, $valueBytes.Length)
 
-        # Prepend IV to encrypted data (IV is first 16 bytes)
-        $encryptedValue = [Convert]::ToBase64String($iv + $encryptedBytes)
+            # Prepend IV to encrypted data (IV is first 16 bytes)
+            $encryptedValue = [Convert]::ToBase64String($iv + $encryptedBytes)
+        }
+        catch {
+            throw "Failed to encrypt the value: $_"
+        }
+
+        # Publish the encrypted value to the KVP for the specified key
+        try {
+            Set-VMKeyValuePair -VMName $VmName -Name $Key -Value $encryptedValue
+            Write-Host "Successfully published encrypted value for key '$Key' on VM '$VmName'."
+        }
+        catch {
+            throw "Failed to publish the encrypted value to the KVP: $_"
+        }
     }
-    catch {
-        throw "Failed to encrypt the value: $_"
-    }
+    else {
+        # Value needs chunking
+        Write-Host "Value for key '$Key' is $($Value.Length) characters, chunking into 200-character pieces..."
+        
+        # Calculate number of chunks needed
+        $chunkCount = [Math]::Ceiling($Value.Length / 200.0)
+        
+        # Validate chunk count (max 10 chunks = 2000 characters)
+        if ($chunkCount -gt 10) {
+            throw "Value for key '$Key' is too long ($($Value.Length) characters). Maximum supported length is 2000 characters (10 chunks of 200 characters each)."
+        }
+        
+        # Split value into chunks and encrypt each separately
+        for ($i = 0; $i -lt $chunkCount; $i++) {
+            $startIndex = $i * 200
+            $chunkLength = [Math]::Min(200, $Value.Length - $startIndex)
+            $chunk = $Value.Substring($startIndex, $chunkLength)
+            $chunkKey = "$Key._$i"
+            
+            # Encrypt this chunk
+            try {
+                $aes = New-Object System.Security.Cryptography.AesManaged
+                $aes.Key = [Convert]::FromBase64String($AesKey)
+                $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+                $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+                $aes.GenerateIV()  # Generate a random IV for each chunk
 
-    # Publish the encrypted value to the KVP for the specified key
-    try {
-        Set-VMKeyValuePair -VMName $VmName -Name $Key -Value $encryptedValue
-        Write-Host "Successfully published encrypted value for key '$Key' on VM '$VmName'."
-    }
-    catch {
-        throw "Failed to publish the encrypted value to the KVP: $_"
+                $iv = $aes.IV
+                $encryptor = $aes.CreateEncryptor()
+
+                $chunkBytes = [System.Text.Encoding]::UTF8.GetBytes($chunk)
+                $encryptedChunkBytes = $encryptor.TransformFinalBlock($chunkBytes, 0, $chunkBytes.Length)
+
+                # Prepend IV to encrypted data (IV is first 16 bytes)
+                $encryptedChunk = [Convert]::ToBase64String($iv + $encryptedChunkBytes)
+            }
+            catch {
+                throw "Failed to encrypt chunk $i for key '$Key': $_"
+            }
+
+            # Publish the encrypted chunk to the KVP
+            try {
+                Set-VMKeyValuePair -VMName $VmName -Name $chunkKey -Value $encryptedChunk
+                Write-Host "Successfully published encrypted chunk $i for key '$Key' as '$chunkKey' on VM '$VmName'."
+            }
+            catch {
+                throw "Failed to publish encrypted chunk $i for key '$Key': $_"
+            }
+        }
+        
+        Write-Host "Successfully published $chunkCount chunks for key '$Key' on VM '$VmName'."
     }
 }
 

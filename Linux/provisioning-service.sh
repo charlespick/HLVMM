@@ -18,6 +18,7 @@ if ! systemctl is-active --quiet hv-kvp-daemon && ! systemctl is-active --quiet 
 fi
 
 # Function to read a key from Hyper-V KVP using the correct pool and format
+# Automatically handles chunked values (keys ending with ._0, ._1, etc.)
 read_hyperv_kvp() {
     local key="$1"
     local kvp_file="/var/lib/hyperv/.kvp_pool_0"
@@ -29,6 +30,7 @@ read_hyperv_kvp() {
     local nb=$(wc -c < "$kvp_file")
     local nkv=$(( nb / (512+2048) ))
     
+    # First try to read the key directly (non-chunked case)
     for n in $(seq 0 $(( $nkv - 1 )) ); do
         local offset=$(( $n * (512 + 2048) ))
         local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
@@ -38,6 +40,46 @@ read_hyperv_kvp() {
             return 0
         fi
     done
+    
+    # If direct key not found, check if this is a chunked key (look for key._0, key._1, etc.)
+    local chunks=()
+    local chunk_keys=()
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._9
+    for chunk_index in {0..9}; do
+        local chunk_key="${key}._${chunk_index}"
+        local found_chunk=""
+        
+        for n in $(seq 0 $(( $nkv - 1 )) ); do
+            local offset=$(( $n * (512 + 2048) ))
+            local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+            if [[ "$k" == "$chunk_key" ]]; then
+                found_chunk=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+                break
+            fi
+        done
+        
+        if [[ -n "$found_chunk" ]]; then
+            chunks[$chunk_index]="$found_chunk"
+            chunk_keys+=("$chunk_key")
+        else
+            # No more chunks found, stop looking
+            break
+        fi
+    done
+    
+    # If we found chunks, reconstruct the original value
+    if [[ ${#chunks[@]} -gt 0 ]]; then
+        local reconstructed_value=""
+        
+        # Combine chunks in order (0, 1, 2, ...)
+        for chunk_index in "${!chunks[@]}"; do
+            reconstructed_value="${reconstructed_value}${chunks[$chunk_index]}"
+        done
+        
+        echo "$reconstructed_value"
+        return 0
+    fi
     
     return 1
 }
@@ -306,6 +348,7 @@ phase_one() {
     echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
 
     # Get all hlvmm.data keys dynamically instead of using hardcoded list
+    # Exclude chunked keys (those ending with ._[0-9]) from the main list
     hlvmm_data_keys=()
     local kvp_file="/var/lib/hyperv/.kvp_pool_0"
     
@@ -317,7 +360,11 @@ phase_one() {
             local offset=$(( $n * (512 + 2048) ))
             local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
             if [[ "$k" == hlvmm.data.* ]]; then
-                hlvmm_data_keys+=("$k")
+                # Exclude chunked keys (ending with ._[0-9]) from the main list
+                # These will be automatically reconstructed by read_hyperv_kvp
+                if [[ ! "$k" =~ \._[0-9]$ ]]; then
+                    hlvmm_data_keys+=("$k")
+                fi
             fi
         done
     fi

@@ -6,7 +6,58 @@ function Read-HyperVKvp {
     )
 
     $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
-    (Get-ItemProperty -Path $regPath -Name $Key).$Key
+    
+    # First try to read the key directly (non-chunked case)
+    try {
+        $directValue = (Get-ItemProperty -Path $regPath -Name $Key -ErrorAction SilentlyContinue).$Key
+        if ($directValue) {
+            return $directValue
+        }
+    }
+    catch {
+        # Key not found directly, will check for chunks below
+    }
+    
+    # If direct key not found, check if this is a chunked key (look for key._0, key._1, etc.)
+    $chunks = @{}
+    $chunkKeys = @()
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._9
+    for ($chunkIndex = 0; $chunkIndex -le 9; $chunkIndex++) {
+        $chunkKey = "$Key._$chunkIndex"
+        try {
+            $chunkValue = (Get-ItemProperty -Path $regPath -Name $chunkKey -ErrorAction SilentlyContinue).$chunkKey
+            if ($chunkValue) {
+                $chunks[$chunkIndex] = $chunkValue
+                $chunkKeys += $chunkKey
+            }
+            else {
+                # No more chunks found, stop looking
+                break
+            }
+        }
+        catch {
+            # Chunk not found, stop looking
+            break
+        }
+    }
+    
+    # If we found chunks, reconstruct the original value
+    if ($chunks.Count -gt 0) {
+        $reconstructedValue = ""
+        
+        # Combine chunks in order (0, 1, 2, ...)
+        for ($i = 0; $i -lt $chunks.Count; $i++) {
+            if ($chunks.ContainsKey($i)) {
+                $reconstructedValue += $chunks[$i]
+            }
+        }
+        
+        return $reconstructedValue
+    }
+    
+    # Key not found (neither direct nor chunked)
+    return $null
 }
 
 function Write-HyperVKvp {
@@ -72,6 +123,7 @@ function Decrypt-AesCbcWithPrependedIV {
 
 function Get-HlvmmDataKeys {
     # Get all KVP keys from registry that start with "hlvmm.data." and decrypt their values
+    # Exclude chunked keys (those ending with ._[0-9]) from the main list
     param(
         [Parameter(Mandatory)]
         [string]$AesKey
@@ -83,12 +135,12 @@ function Get-HlvmmDataKeys {
     try {
         $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
         if ($regItem) {
-            $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" } | ForEach-Object {
+            $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]$' } | ForEach-Object {
                 $keyName = $_
                 $keyValue = (Get-ItemProperty -Path $regPath -Name $keyName).$keyName
                 if ($keyValue) {
                     try {
-                        # Decrypt the value
+                        # Decrypt the value (Read-HyperVKvp will handle chunked reconstruction if needed)
                         $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $AesKey -CiphertextBase64 $keyValue -Output Utf8
                         $allKeys += @{ Key = $keyName; Value = $decryptedValue }
                     }
@@ -202,14 +254,15 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
         $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
 
-        # Get all hlvmm.data keys dynamically instead of using hardcoded list
+        # Get all hlvmm.data keys dynamically instead of using hardcoded list  
+        # Exclude chunked keys (those ending with ._[0-9]) from the main list
         $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
         $hlvmmDataKeys = @()
         
         try {
             $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
             if ($regItem) {
-                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" }
+                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]$' }
             }
         }
         catch {
