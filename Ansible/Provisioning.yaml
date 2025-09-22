@@ -47,13 +47,13 @@
       set_fact:
         effective_cnf_ansible_ssh_user: >-
           {%- if use_default_ansible_creds is defined and use_default_ansible_creds == "Yes" -%}
-          {{ default_cnf_ansible_ssh_user }}
+          {{ default_ansible_ssh_user }}
           {%- else -%}
           {{ cnf_ansible_ssh_user | default('') }}
           {%- endif -%}
         effective_cnf_ansible_ssh_key: >-
           {%- if use_default_ansible_creds is defined and use_default_ansible_creds == "Yes" -%}
-          {{ default_cnf_ansible_ssh_key }}
+          {{ default_ansible_ssh_key }}
           {%- else -%}
           {{ cnf_ansible_ssh_key | default('') }}
           {%- endif -%}
@@ -143,7 +143,7 @@
         {% if effective_guest_domain_joinuid is defined and effective_guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ effective_guest_domain_joinuid }}{% endif %}
         {% if effective_guest_domain_joinou is defined and effective_guest_domain_joinou|length > 0 %}-GuestDomainJoinOU {{ effective_guest_domain_joinou }}{% endif %}
         {% if effective_cnf_ansible_ssh_user is defined and effective_cnf_ansible_ssh_user|length > 0 %}-AnsibleSshUser {{ effective_cnf_ansible_ssh_user }}{% endif %}
-        {% if effective_cnf_ansible_ssh_key is defined and effective_cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey {{ effective_cnf_ansible_ssh_key }}{% endif %}
+        {% if effective_cnf_ansible_ssh_key is defined and effective_cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey "{{ effective_cnf_ansible_ssh_key }}"{% endif %}
       environment:
         GuestLaPw: "{{ guest_la_pw }}"
         GuestDomainJoinPw: "{{ effective_guest_domain_joinpw | default('') }}"

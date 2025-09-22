@@ -6,7 +6,124 @@ function Read-HyperVKvp {
     )
 
     $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
-    (Get-ItemProperty -Path $regPath -Name $Key).$Key
+    
+    # First try to read the key directly (non-chunked case)
+    try {
+        $directValue = (Get-ItemProperty -Path $regPath -Name $Key -ErrorAction SilentlyContinue).$Key
+        if ($directValue) {
+            return $directValue
+        }
+    }
+    catch {
+        # Key not found directly, will check for chunks below
+    }
+    
+    # If direct key not found, check if this is a chunked key (look for key._0, key._1, etc.)
+    $chunks = @{}
+    $chunkKeys = @()
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
+        $chunkKey = "$Key._$chunkIndex"
+        try {
+            $chunkValue = (Get-ItemProperty -Path $regPath -Name $chunkKey -ErrorAction SilentlyContinue).$chunkKey
+            if ($chunkValue) {
+                $chunks[$chunkIndex] = $chunkValue
+                $chunkKeys += $chunkKey
+            }
+            else {
+                # No more chunks found, stop looking
+                break
+            }
+        }
+        catch {
+            # Chunk not found, stop looking
+            break
+        }
+    }
+    
+    # If we found chunks, reconstruct the original value
+    if ($chunks.Count -gt 0) {
+        $reconstructedValue = ""
+        
+        # Combine chunks in order (0, 1, 2, ...)
+        for ($i = 0; $i -lt $chunks.Count; $i++) {
+            if ($chunks.ContainsKey($i)) {
+                $reconstructedValue += $chunks[$i]
+            }
+        }
+        
+        return $reconstructedValue
+    }
+    
+    # Key not found (neither direct nor chunked)
+    return $null
+}
+
+function Read-HyperVKvpWithDecryption {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$AesKey
+    )
+
+    $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
+    
+    # First try to read the key directly (non-chunked case)
+    try {
+        $directValue = (Get-ItemProperty -Path $regPath -Name $Key -ErrorAction SilentlyContinue).$Key
+        if ($directValue) {
+            # Decrypt the single value and return
+            return Decrypt-AesCbcWithPrependedIV -AesKey $AesKey -CiphertextBase64 $directValue -Output Utf8
+        }
+    }
+    catch {
+        # Key not found directly, will check for chunks below
+    }
+    
+    # If direct key not found, check if this is a chunked key
+    $chunks = @{}
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
+        $chunkKey = "$Key._$chunkIndex"
+        try {
+            $chunkValue = (Get-ItemProperty -Path $regPath -Name $chunkKey -ErrorAction SilentlyContinue).$chunkKey
+            if ($chunkValue) {
+                $chunks[$chunkIndex] = $chunkValue
+            }
+            else {
+                # No more chunks found, stop looking
+                break
+            }
+        }
+        catch {
+            # Chunk not found, stop looking
+            break
+        }
+    }
+    
+    # If we found chunks, decrypt each chunk individually and reconstruct
+    if ($chunks.Count -gt 0) {
+        $reconstructedPlaintext = ""
+        
+        # Decrypt and combine chunks in order (0, 1, 2, ...)
+        for ($i = 0; $i -lt $chunks.Count; $i++) {
+            if ($chunks.ContainsKey($i)) {
+                try {
+                    $decryptedChunk = Decrypt-AesCbcWithPrependedIV -AesKey $AesKey -CiphertextBase64 $chunks[$i] -Output Utf8
+                    $reconstructedPlaintext += $decryptedChunk
+                }
+                catch {
+                    throw "Failed to decrypt chunk $i of key $Key : $_"
+                }
+            }
+        }
+        
+        return $reconstructedPlaintext
+    }
+    
+    # Key not found (neither direct nor chunked)
+    return $null
 }
 
 function Write-HyperVKvp {
@@ -72,6 +189,7 @@ function Decrypt-AesCbcWithPrependedIV {
 
 function Get-HlvmmDataKeys {
     # Get all KVP keys from registry that start with "hlvmm.data." and decrypt their values
+    # Exclude chunked keys (those ending with ._[0-9]) from the main list
     param(
         [Parameter(Mandatory)]
         [string]$AesKey
@@ -83,18 +201,17 @@ function Get-HlvmmDataKeys {
     try {
         $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
         if ($regItem) {
-            $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" } | ForEach-Object {
+            $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]+$' } | ForEach-Object {
                 $keyName = $_
-                $keyValue = (Get-ItemProperty -Path $regPath -Name $keyName).$keyName
-                if ($keyValue) {
-                    try {
-                        # Decrypt the value
-                        $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $AesKey -CiphertextBase64 $keyValue -Output Utf8
+                try {
+                    # Use the new decryption function that handles chunking properly
+                    $decryptedValue = Read-HyperVKvpWithDecryption -Key $keyName -AesKey $AesKey
+                    if ($decryptedValue) {
                         $allKeys += @{ Key = $keyName; Value = $decryptedValue }
                     }
-                    catch {
-                        Write-Host "Failed to decrypt key $keyName : $_"
-                    }
+                }
+                catch {
+                    Write-Host "Failed to decrypt key $keyName : $_"
                 }
             }
         }
@@ -202,14 +319,15 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
         $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
 
-        # Get all hlvmm.data keys dynamically instead of using hardcoded list
+        # Get all hlvmm.data keys dynamically instead of using hardcoded list  
+        # Exclude chunked keys (those ending with ._[0-9]) from the main list
         $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
         $hlvmmDataKeys = @()
         
         try {
             $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
             if ($regItem) {
-                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" }
+                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]+$' }
             }
         }
         catch {
@@ -226,17 +344,21 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         # Decrypt and save each key using its actual KVP key name
         foreach ($key in $hlvmmDataKeys) {
-            $encryptedValueBase64 = Read-HyperVKvp -Key $key -ErrorAction SilentlyContinue
-            if (-not $encryptedValueBase64) {
-                Write-Host "Failed to retrieve encrypted value for key: $key. Skipping..."
-                continue
+            try {
+                $decryptedValue = Read-HyperVKvpWithDecryption -Key $key -AesKey $unwrappedAesKey
+                if ($decryptedValue) {
+                    # Save using the actual KVP key name (replacing dots with underscores for valid filenames)
+                    $safeFileName = $key -replace '\.', '_'
+                    $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$safeFileName.txt")
+                    [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
+                    Write-Host "Decrypted and saved: $key -> $safeFileName.txt"
+                } else {
+                    Write-Host "Failed to retrieve value for key: $key. Skipping..."
+                }
             }
-            $decryptedValue = Decrypt-AesCbcWithPrependedIV -AesKey $unwrappedAesKey -CiphertextBase64 $encryptedValueBase64 -Output Utf8
-            # Save using the actual KVP key name (replacing dots with underscores for valid filenames)
-            $safeFileName = $key -replace '\.', '_'
-            $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$safeFileName.txt")
-            [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
-            Write-Host "Decrypted and saved: $key -> $safeFileName.txt"
+            catch {
+                Write-Host "Failed to decrypt key $key : $_"
+            }
         }
 
         # Get all hlvmm.data keys and their decrypted values for checksum verification
