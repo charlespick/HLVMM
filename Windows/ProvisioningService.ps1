@@ -327,7 +327,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         try {
             $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
             if ($regItem) {
-                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]$' }
+                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]+$' }
             }
         }
         catch {
