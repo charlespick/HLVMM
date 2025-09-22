@@ -200,7 +200,7 @@ read_hyperv_kvp() {
         local reconstructed_value=""
         
         # Combine chunks in order (0, 1, 2, ...)
-        for chunk_index in "${!chunks[@]}"; do
+        for ((chunk_index=0; chunk_index<${#chunks[@]}; chunk_index++)); do
             reconstructed_value="${reconstructed_value}${chunks[$chunk_index]}"
         done
         
