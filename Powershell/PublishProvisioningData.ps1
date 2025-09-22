@@ -40,6 +40,13 @@ if ($GuestDomainJoinTarget -or $GuestDomainJoinUid -or $GuestDomainJoinPw -or $G
     }
 }
 
+# Validate Ansible SSH settings if any Ansible SSH-related parameter is provided
+if ($AnsibleSshUser -or $AnsibleSshKey) {
+    if (-not $AnsibleSshUser -or -not $AnsibleSshKey) {
+        throw "Both Ansible SSH settings (AnsibleSshUser, AnsibleSshKey) must be provided if any Ansible SSH setting is specified."
+    }
+}
+
 function Set-VMKeyValuePair {
     param (
         [Parameter(Mandatory = $true)]
@@ -53,15 +60,33 @@ function Set-VMKeyValuePair {
     )
 
     # Get the VM management service and target VM
-    $VmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class `
-        Msvm_VirtualSystemManagementService
-    $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
-        Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+    try {
+        $VmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+            Msvm_VirtualSystemManagementService
+    }
+    catch {
+        throw "Failed to get VM management service: $_"
+    }
 
-    if (-not $vm) { throw "VM '$VMName' not found." }
+    try {
+        $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+            Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+    }
+    catch {
+        throw "Failed to get VM '$VMName': $_"
+    }
 
-    $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
-    $hostItems = @($kvpSettings.HostExchangeItems)
+    if (-not $vm) { 
+        throw "VM '$VMName' not found." 
+    }
+
+    try {
+        $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
+        $hostItems = @($kvpSettings.HostExchangeItems)
+    }
+    catch {
+        throw "Failed to get KVP settings: $_"
+    }
 
     if ($hostItems.Count -gt 0) {
         $toRemove = @()
@@ -78,21 +103,42 @@ function Set-VMKeyValuePair {
         }
 
         if ($toRemove.Count -gt 0) {
-            $null = $VmMgmt.RemoveKvpItems($vm, $toRemove)
+            try {
+                $null = $VmMgmt.RemoveKvpItems($vm, $toRemove)
+            }
+            catch {
+                throw "Failed to remove existing KVP items: $_"
+            }
         }
     }
 
     # Create and add the new KVP (Source=0 => host-to-guest)
-    $kvpDataItem = ([WMIClass][String]::Format("\\{0}\{1}:{2}",
-            $VmMgmt.ClassPath.Server,
-            $VmMgmt.ClassPath.NamespacePath,
-            "Msvm_KvpExchangeDataItem")).CreateInstance()
+    try {
+        $kvpDataItem = ([WMIClass][String]::Format("\\{0}\{1}:{2}",
+                $VmMgmt.ClassPath.Server,
+                $VmMgmt.ClassPath.NamespacePath,
+                "Msvm_KvpExchangeDataItem")).CreateInstance()
+    }
+    catch {
+        throw "Failed to create KVP data item: $_"
+    }
 
-    $kvpDataItem.Name = $Name
-    $kvpDataItem.Data = $Value
-    $kvpDataItem.Source = 0
+    try {
+        $kvpDataItem.Name = $Name
+        $kvpDataItem.Data = $Value
+        $kvpDataItem.Source = 0
+    }
+    catch {
+        throw "Failed to set KVP properties: $_"
+    }
 
-    $null = $VmMgmt.AddKvpItems($vm, $kvpDataItem.PSBase.GetText(1))
+    try {
+        $kvpXml = $kvpDataItem.PSBase.GetText(1)
+        $VmMgmt.AddKvpItems($vm, $kvpXml)
+    }
+    catch {
+        throw "Failed to add KVP item '$Name': $_"
+    }
 }
 
 function Get-VMKeyValuePair {
@@ -103,9 +149,12 @@ function Get-VMKeyValuePair {
         [Parameter(Mandatory = $true)]
         [string]$Name
     )
+    
     $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
         Msvm_ComputerSystem -Filter "ElementName='$VMName'"
-    $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
+    
+    # First try to get the key directly (non-chunked case)
+    $directResult = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
             $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
                 "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
         if ($GuestExchangeItemXml -ne $null) {
@@ -113,6 +162,56 @@ function Get-VMKeyValuePair {
                     "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
         }
     }
+    
+    if ($directResult) {
+        return $directResult
+    }
+    
+    # If direct key not found, check if this is a chunked key (look for Name._0, Name._1, etc.)
+    $chunks = @{}
+    $chunkKeys = @()
+    
+    # Get all KVP items from the VM
+    $allKvpItems = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems
+    
+    # Look for chunks with pattern Name._0, Name._1, ..., Name._29
+    for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
+        $chunkKey = "$Name._$chunkIndex"
+        
+        $chunkResult = $allKvpItems | % { `
+                $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
+                    "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
+            if ($GuestExchangeItemXml -ne $null) {
+                $GuestExchangeItemXml.SelectSingleNode(`
+                        "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+            }
+        }
+        
+        if ($chunkResult) {
+            $chunks[$chunkIndex] = $chunkResult
+            $chunkKeys += $chunkKey
+        } else {
+            # No more chunks found, stop looking
+            break
+        }
+    }
+    
+    # If we found chunks, reconstruct the original value
+    if ($chunks.Count -gt 0) {
+        $reconstructedValue = ""
+        
+        # Combine chunks in order (0, 1, 2, ...)
+        for ($i = 0; $i -lt $chunks.Count; $i++) {
+            if ($chunks.ContainsKey($i)) {
+                $reconstructedValue += $chunks[$i]
+            }
+        }
+        
+        return $reconstructedValue
+    }
+    
+    # Key not found (neither direct nor chunked)
+    return $null
 }
 
 function Publish-KvpEncryptedValue {
@@ -130,34 +229,89 @@ function Publish-KvpEncryptedValue {
         [string]$AesKey
     )
 
-    # Encrypt the value using AES with random IV
-    try {
-        $aes = New-Object System.Security.Cryptography.AesManaged
-        $aes.Key = [Convert]::FromBase64String($AesKey)
-        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
-        $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
-        $aes.GenerateIV()  # Generate a random IV
+    # Check if value needs chunking (longer than 100 characters)
+    if ($Value.Length -le 100) {
+        # Value is short enough, encrypt and publish normally
+        try {
+            $aes = New-Object System.Security.Cryptography.AesManaged
+            $aes.Key = [Convert]::FromBase64String($AesKey)
+            $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+            $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+            $aes.GenerateIV()  # Generate a random IV
 
-        $iv = $aes.IV
-        $encryptor = $aes.CreateEncryptor()
+            $iv = $aes.IV
+            $encryptor = $aes.CreateEncryptor()
 
-        $valueBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
-        $encryptedBytes = $encryptor.TransformFinalBlock($valueBytes, 0, $valueBytes.Length)
+            $valueBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+            $encryptedBytes = $encryptor.TransformFinalBlock($valueBytes, 0, $valueBytes.Length)
 
-        # Prepend IV to encrypted data (IV is first 16 bytes)
-        $encryptedValue = [Convert]::ToBase64String($iv + $encryptedBytes)
+            # Prepend IV to encrypted data (IV is first 16 bytes)
+            $encryptedValue = [Convert]::ToBase64String($iv + $encryptedBytes)
+        }
+        catch {
+            throw "Failed to encrypt the value: $_"
+        }
+
+        # Publish the encrypted value to the KVP for the specified key
+        try {
+            Set-VMKeyValuePair -VMName $VmName -Name $Key -Value $encryptedValue
+            Write-Host "Successfully published encrypted value for key '$Key' on VM '$VmName'."
+        }
+        catch {
+            throw "Failed to publish the encrypted value to the KVP: $_"
+        }
     }
-    catch {
-        throw "Failed to encrypt the value: $_"
-    }
+    else {
+        # Value needs chunking
+        Write-Host "Value for key '$Key' is $($Value.Length) characters, chunking into 100-character pieces..."
+        
+        # Calculate number of chunks needed
+        $chunkCount = [Math]::Ceiling($Value.Length / 100.0)
+        
+        # Validate chunk count (max 30 chunks = 3000 characters)
+        if ($chunkCount -gt 30) {
+            throw "Value for key '$Key' is too long ($($Value.Length) characters). Maximum supported length is 3000 characters (30 chunks of 100 characters each)."
+        }
+        
+        # Split value into chunks and encrypt each separately
+        for ($i = 0; $i -lt $chunkCount; $i++) {
+            $startIndex = $i * 100
+            $chunkLength = [Math]::Min(100, $Value.Length - $startIndex)
+            $chunk = $Value.Substring($startIndex, $chunkLength)
+            $chunkKey = "$Key._$i"
+            
+            # Encrypt this chunk
+            try {
+                $aes = New-Object System.Security.Cryptography.AesManaged
+                $aes.Key = [Convert]::FromBase64String($AesKey)
+                $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+                $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+                $aes.GenerateIV()  # Generate a random IV for each chunk
 
-    # Publish the encrypted value to the KVP for the specified key
-    try {
-        Set-VMKeyValuePair -VMName $VmName -Name $Key -Value $encryptedValue
-        Write-Host "Successfully published encrypted value for key '$Key' on VM '$VmName'."
-    }
-    catch {
-        throw "Failed to publish the encrypted value to the KVP: $_"
+                $iv = $aes.IV
+                $encryptor = $aes.CreateEncryptor()
+
+                $chunkBytes = [System.Text.Encoding]::UTF8.GetBytes($chunk)
+                $encryptedChunkBytes = $encryptor.TransformFinalBlock($chunkBytes, 0, $chunkBytes.Length)
+
+                # Prepend IV to encrypted data (IV is first 16 bytes)
+                $encryptedChunk = [Convert]::ToBase64String($iv + $encryptedChunkBytes)
+            }
+            catch {
+                throw "Failed to encrypt chunk $i for key '$Key': $_"
+            }
+
+            # Publish the encrypted chunk to the KVP
+            try {
+                Set-VMKeyValuePair -VMName $VmName -Name $chunkKey -Value $encryptedChunk
+                Write-Host "Successfully published encrypted chunk $i for key '$Key' as '$chunkKey' on VM '$VmName'."
+            }
+            catch {
+                throw "Failed to publish encrypted chunk $i for key '$Key': $_"
+            }
+        }
+        
+        Write-Host "Successfully published $chunkCount chunks for key '$Key' on VM '$VmName'."
     }
 }
 
@@ -289,6 +443,8 @@ $provisioningDataItems = @(
     @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
     @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
     @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_ou"; Value = $GuestDomainJoinOU }
+    @{ ParamName = "AnsibleSshUser"; KvpKey = "hlvmm.data.ansible_ssh_user"; Value = $AnsibleSshUser }
+    @{ ParamName = "AnsibleSshKey"; KvpKey = "hlvmm.data.ansible_ssh_key"; Value = $AnsibleSshKey }
     @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
     @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
     @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }
@@ -379,6 +535,7 @@ Write-Host "DEBUG: Publishing keys: $($keysToPublish -join ', ')"
 
 foreach ($item in $dataKeysForChecksum) {
     Write-Host "DEBUG: Publishing '$($item.ParamName)' as '$($item.KvpKey)' (length: $($item.Value.Length))"
+    
     try {
         Publish-KvpEncryptedValue -VmName $GuestHostName -Key $item.KvpKey -Value $item.Value -AesKey $aesKey
         Write-Host "DEBUG: Successfully published '$($item.KvpKey)'"
@@ -387,6 +544,10 @@ foreach ($item in $dataKeysForChecksum) {
         Write-Host "ERROR: Failed to publish encrypted value for parameter '$($item.ParamName)' (key: '$($item.KvpKey)'): $_"
     }
 }
+
+# Wait 30 seconds before signaling completion to ensure all chunks are properly published
+Write-Host "Waiting 30 seconds before signaling provisioning data publication completion..."
+Start-Sleep -Seconds 30
 
 # Publish the host provisioning system state to the KVP
 try {

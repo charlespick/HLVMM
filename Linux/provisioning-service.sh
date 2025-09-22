@@ -17,7 +17,135 @@ if ! systemctl is-active --quiet hv-kvp-daemon && ! systemctl is-active --quiet 
     fi
 fi
 
+# Function to read and decrypt a key from Hyper-V KVP with proper chunking support
+read_hyperv_kvp_with_decryption() {
+    local key="$1"
+    local aes_key_hex="$2"
+    local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+    
+    if [[ ! -f "$kvp_file" ]]; then
+        return 1
+    fi
+    
+    local nb=$(wc -c < "$kvp_file")
+    local nkv=$(( nb / (512+2048) ))
+    
+    # First try to read the key directly (non-chunked case)
+    for n in $(seq 0 $(( $nkv - 1 )) ); do
+        local offset=$(( $n * (512 + 2048) ))
+        local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+        if [[ "$k" == "$key" ]]; then
+            local encrypted_value=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+            
+            # Decrypt the single value
+            if decrypt_single_value "$encrypted_value" "$aes_key_hex"; then
+                return 0
+            else
+                return 1
+            fi
+        fi
+    done
+    
+    # If direct key not found, check if this is a chunked key (look for key._0, key._1, etc.)
+    local -A chunks
+    local chunk_keys=()
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for chunk_index in {0..29}; do
+        local chunk_key="${key}._${chunk_index}"
+        local found_chunk=""
+        
+        for n in $(seq 0 $(( $nkv - 1 )) ); do
+            local offset=$(( $n * (512 + 2048) ))
+            local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+            if [[ "$k" == "$chunk_key" ]]; then
+                found_chunk=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+                break
+            fi
+        done
+        
+        if [[ -n "$found_chunk" ]]; then
+            chunks[$chunk_index]="$found_chunk"
+            chunk_keys+=("$chunk_key")
+        else
+            # No more chunks found, stop looking
+            break
+        fi
+    done
+    
+    # If we found chunks, decrypt each chunk individually and reconstruct
+    if [[ ${#chunks[@]} -gt 0 ]]; then
+        local reconstructed_plaintext=""
+        
+        # Decrypt and combine chunks in order (0, 1, 2, ...)
+        for chunk_index in $(seq 0 $(( ${#chunks[@]} - 1 )) ); do
+            if [[ -n "${chunks[$chunk_index]}" ]]; then
+                local temp_decrypted="/tmp/decrypted_chunk_${chunk_index}_$$"
+                
+                if decrypt_single_value "${chunks[$chunk_index]}" "$aes_key_hex" "$temp_decrypted"; then
+                    # Append this chunk's plaintext to the result
+                    reconstructed_plaintext="${reconstructed_plaintext}$(cat "$temp_decrypted")"
+                    rm -f "$temp_decrypted"
+                else
+                    echo "ERROR: Failed to decrypt chunk $chunk_index of key $key" >&2
+                    rm -f "$temp_decrypted"
+                    return 1
+                fi
+            fi
+        done
+        
+        # Output the reconstructed plaintext
+        echo "$reconstructed_plaintext"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Helper function to decrypt a single encrypted value 
+decrypt_single_value() {
+    local encrypted_value="$1"
+    local aes_key_hex="$2"
+    local output_file="${3:-/dev/stdout}"
+    
+    # Use temporary files to handle binary data properly
+    local temp_encrypted="/tmp/encrypted_single_$$"
+    local temp_iv="/tmp/iv_single_$$"
+    local temp_ciphertext="/tmp/ciphertext_single_$$"
+    
+    # Decode base64 to temporary file
+    echo "$encrypted_value" | base64 -d > "$temp_encrypted"
+    
+    # Check minimum size
+    local encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
+    if [[ $encrypted_size -lt 16 ]]; then
+        echo "ERROR: Invalid encrypted data (size: $encrypted_size bytes)" >&2
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 1
+    fi
+    
+    # Extract IV (first 16 bytes) and ciphertext
+    dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
+    dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
+    
+    # Convert IV to hex
+    local iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
+    
+    # Decrypt using AES-256-CBC
+    if openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" -out "$output_file" 2>/dev/null; then
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 0
+    elif openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//' > "$output_file"; then
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 0
+    else
+        rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        return 1
+    fi
+}
+
 # Function to read a key from Hyper-V KVP using the correct pool and format
+# Automatically handles chunked values (keys ending with ._0, ._1, etc.)
 read_hyperv_kvp() {
     local key="$1"
     local kvp_file="/var/lib/hyperv/.kvp_pool_0"
@@ -29,6 +157,7 @@ read_hyperv_kvp() {
     local nb=$(wc -c < "$kvp_file")
     local nkv=$(( nb / (512+2048) ))
     
+    # First try to read the key directly (non-chunked case)
     for n in $(seq 0 $(( $nkv - 1 )) ); do
         local offset=$(( $n * (512 + 2048) ))
         local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
@@ -38,6 +167,46 @@ read_hyperv_kvp() {
             return 0
         fi
     done
+    
+    # If direct key not found, check if this is a chunked key (look for key._0, key._1, etc.)
+    local chunks=()
+    local chunk_keys=()
+    
+    # Look for chunks with pattern key._0, key._1, ..., key._29
+    for chunk_index in {0..29}; do
+        local chunk_key="${key}._${chunk_index}"
+        local found_chunk=""
+        
+        for n in $(seq 0 $(( $nkv - 1 )) ); do
+            local offset=$(( $n * (512 + 2048) ))
+            local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+            if [[ "$k" == "$chunk_key" ]]; then
+                found_chunk=$(dd if="$kvp_file" count=2048 bs=1 skip=$(( $offset + 512 )) status=none | sed 's/\x0.*//g')
+                break
+            fi
+        done
+        
+        if [[ -n "$found_chunk" ]]; then
+            chunks[$chunk_index]="$found_chunk"
+            chunk_keys+=("$chunk_key")
+        else
+            # No more chunks found, stop looking
+            break
+        fi
+    done
+    
+    # If we found chunks, reconstruct the original value
+    if [[ ${#chunks[@]} -gt 0 ]]; then
+        local reconstructed_value=""
+        
+        # Combine chunks in order (0, 1, 2, ...)
+        for chunk_index in "${!chunks[@]}"; do
+            reconstructed_value="${reconstructed_value}${chunks[$chunk_index]}"
+        done
+        
+        echo "$reconstructed_value"
+        return 0
+    fi
     
     return 1
 }
@@ -305,29 +474,105 @@ phase_one() {
     
     echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
 
-    # Get all hlvmm.data keys dynamically instead of using hardcoded list
-    hlvmm_data_keys=()
-    local kvp_file="/var/lib/hyperv/.kvp_pool_0"
-    
-    if [[ -f "$kvp_file" ]]; then
+    # Function to debug print ALL keys in KVP
+    debug_print_all_kvp_keys() {
+        local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+        
+        if [[ ! -f "$kvp_file" ]]; then
+            echo "DEBUG: KVP file not found at $kvp_file"
+            return
+        fi
+        
         local nb=$(wc -c < "$kvp_file")
         local nkv=$(( nb / (512+2048) ))
+        
+        local all_keys=()
+        local hlvmm_keys=()
+        local hlvmm_data_keys=()
+        local hlvmm_chunked_keys=()
+        local other_keys=()
         
         for n in $(seq 0 $(( $nkv - 1 )) ); do
             local offset=$(( $n * (512 + 2048) ))
             local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
-            if [[ "$k" == hlvmm.data.* ]]; then
-                hlvmm_data_keys+=("$k")
+            
+            # Skip empty keys
+            if [[ -n "$k" ]]; then
+                all_keys+=("$k")
+                
+                if [[ "$k" == hlvmm.* ]]; then
+                    hlvmm_keys+=("$k")
+                    
+                    if [[ "$k" == hlvmm.data.* ]]; then
+                        if [[ "$k" =~ \._[0-9]+$ ]]; then
+                            hlvmm_chunked_keys+=("$k")
+                        else
+                            hlvmm_data_keys+=("$k")
+                        fi
+                    fi
+                else
+                    other_keys+=("$k")
+                fi
             fi
         done
-    fi
+    }
+    
+    # Function to scan for hlvmm.data keys (including chunked base names)
+    scan_hlvmm_data_keys() {
+        local kvp_file="/var/lib/hyperv/.kvp_pool_0"
+        local keys=()
+        local chunk_base_names=()
+        
+        if [[ -f "$kvp_file" ]]; then
+            local nb=$(wc -c < "$kvp_file")
+            local nkv=$(( nb / (512+2048) ))
+            
+            # First pass: collect regular keys and identify chunk base names
+            for n in $(seq 0 $(( $nkv - 1 )) ); do
+                local offset=$(( $n * (512 + 2048) ))
+                local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
+                if [[ "$k" == hlvmm.data.* ]]; then
+                    if [[ "$k" =~ \._[0-9]+$ ]]; then
+                        # This is a chunked key, extract the base name
+                        local base_name="${k%._*}"
+                        if [[ ! " ${chunk_base_names[@]} " =~ " ${base_name} " ]]; then
+                            chunk_base_names+=("$base_name")
+                        fi
+                    else
+                        # This is a regular (non-chunked) key
+                        keys+=("$k")
+                    fi
+                fi
+            done
+            
+            # Second pass: add chunk base names that don't have regular keys
+            for base_name in "${chunk_base_names[@]}"; do
+                # Check if this base name already exists as a regular key
+                if [[ ! " ${keys[@]} " =~ " ${base_name} " ]]; then
+                    keys+=("$base_name")
+                fi
+            done
+        fi
+        
+        printf '%s\n' "${keys[@]}"
+    }
+
+    # Initial scan and debug for attempt 1
+    debug_print_all_kvp_keys 1
+    
+    # Get all hlvmm.data keys dynamically instead of using hardcoded list
+    echo "Scanning for hlvmm.data keys (initial scan)..."
+    readarray -t hlvmm_data_keys < <(scan_hlvmm_data_keys)
     
     if [[ ${#hlvmm_data_keys[@]} -eq 0 ]]; then
         echo "ERROR: No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
         return 1
     fi
     
-    echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt"
+    echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt (initial scan)"
+    for key in "${hlvmm_data_keys[@]}"; do
+        echo "  - $key"
+    done
 
     # Directory to store decrypted keys
     decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
@@ -352,49 +597,18 @@ phase_one() {
     # Save each decrypted key to a file using the actual KVP key name
     echo "Decrypting provisioning data keys..."
     for key in "${hlvmm_data_keys[@]}"; do
-        encrypted_value=$(read_hyperv_kvp "$key")
+        echo "  Processing key: $key"
+        
         # Create safe filename by replacing dots with underscores  
         safe_filename=$(echo "$key" | sed 's/\./_/g')
-        if [[ -n "$encrypted_value" ]]; then
-            # Use temporary files to handle binary data properly and avoid shell variable issues
-            temp_encrypted="/tmp/encrypted_$safe_filename"
-            temp_iv="/tmp/iv_$safe_filename"
-            temp_ciphertext="/tmp/ciphertext_$safe_filename"
-            
-            # Decode base64 to temporary file
-            echo "$encrypted_value" | base64 -d > "$temp_encrypted"
-            
-            # Check minimum size
-            encrypted_size=$(stat -c%s "$temp_encrypted" 2>/dev/null || echo "0")
-            if [[ $encrypted_size -lt 16 ]]; then
-                echo "ERROR: Invalid encrypted data for $key (size: $encrypted_size bytes)"
-                touch "$decrypted_keys_dir/$safe_filename"
-                rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
-                continue
-            fi
-            
-            # Extract IV (first 16 bytes) and ciphertext using dd
-            dd if="$temp_encrypted" of="$temp_iv" bs=16 count=1 status=none
-            dd if="$temp_encrypted" of="$temp_ciphertext" bs=1 skip=16 status=none
-            
-            # Convert IV to hex
-            iv_hex=$(xxd -p < "$temp_iv" | tr -d '\n')
-            
-            # Decrypt using AES-256-CBC (try with PKCS7 padding first, then no padding)
-            if decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -in "$temp_ciphertext" 2>/dev/null); then
-                echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-                echo "Successfully decrypted $key -> $safe_filename"
-            elif decrypted_value=$(openssl enc -d -aes-256-cbc -K "$aes_key_hex" -iv "$iv_hex" -nopad -in "$temp_ciphertext" 2>/dev/null | sed 's/\x00*$//'); then
-                echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"  
-                echo "Successfully decrypted $key -> $safe_filename (with nopad)"
-            else
-                echo "ERROR: Failed to decrypt value for $key"
-                touch "$decrypted_keys_dir/$safe_filename"
-            fi
-            
-            # Clean up temporary files
-            rm -f "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+        
+        # Use the new decryption function that handles chunking properly
+        if decrypted_value=$(read_hyperv_kvp_with_decryption "$key" "$aes_key_hex"); then
+            echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
+            decrypted_length=${#decrypted_value}
+            echo "    Successfully decrypted $key -> $safe_filename (length: $decrypted_length)"
         else
+            echo "    ERROR: Failed to decrypt value for $key"
             touch "$decrypted_keys_dir/$safe_filename"
         fi
     done
@@ -409,61 +623,122 @@ phase_one() {
         fi
     }
 
-    # Verify the checksum of the provisioning data (calculated from all hlvmm.data values)
-    echo "Verifying provisioning data checksum..."
-    
-    # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
-    # IMPORTANT: Only include keys with non-empty values (matching PowerShell logic)
-    declare -A data_values
-    for key in "${hlvmm_data_keys[@]}"; do
-        safe_filename=$(echo "$key" | sed 's/\./_/g')
-        value=$(read_file_safe "$decrypted_keys_dir/$safe_filename")
+    # Verify the checksum of the provisioning data with retry logic
+    verify_provisioning_checksum() {
+        local attempt=$1
+        echo "Verifying provisioning data checksum (attempt $attempt)..."
         
-        # Trim whitespace and check if non-empty (matching PowerShell [string]::IsNullOrWhiteSpace logic)
-        trimmed_value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # Get all decrypted hlvmm.data values and sort by key name for consistent ordering
+        # IMPORTANT: Only include keys with non-empty values (matching PowerShell logic)
+        declare -A data_values
+        for key in "${hlvmm_data_keys[@]}"; do
+            safe_filename=$(echo "$key" | sed 's/\./_/g')
+            
+            # Use temp file to avoid null-byte command substitution issues
+            temp_value_file="/tmp/checksum_value_$$"
+            read_file_safe "$decrypted_keys_dir/$safe_filename" > "$temp_value_file"
+            value=$(cat "$temp_value_file")
+            rm -f "$temp_value_file"
+            
+            # Trim whitespace and check if non-empty (matching PowerShell [string]::IsNullOrWhiteSpace logic)
+            trimmed_value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            
+            # Only include in checksum if value is non-empty after trimming
+            if [[ -n "$trimmed_value" ]]; then
+                data_values["$key"]="$value"
+            fi
+        done
         
-        # Only include in checksum if value is non-empty after trimming
-        if [[ -n "$trimmed_value" ]]; then
-            data_values["$key"]="$value"
-        fi
-    done
-    
-    # Sort keys and concatenate values
-    concatenated_data=""
-    sorted_keys=($(printf '%s\n' "${!data_values[@]}" | sort))
-    
-    for key in "${sorted_keys[@]}"; do
-        if [[ -n "$concatenated_data" ]]; then
-            concatenated_data="${concatenated_data}|${data_values[$key]}"
-        else
-            concatenated_data="${data_values[$key]}"
-        fi
-    done
+        # Sort keys and concatenate values
+        concatenated_data=""
+        sorted_keys=($(printf '%s\n' "${!data_values[@]}" | sort))
+        
+        for key in "${sorted_keys[@]}"; do
+            if [[ -n "$concatenated_data" ]]; then
+                concatenated_data="${concatenated_data}|${data_values[$key]}"
+            else
+                concatenated_data="${data_values[$key]}"
+            fi
+        done
 
-    # Calculate checksum and encode as Base64 (to match Windows version)
-    # Use a more explicit approach to avoid encoding issues
-    temp_data_file="/tmp/checksum_data"
-    printf '%s' "$concatenated_data" > "$temp_data_file"
-    
-    # Calculate SHA256 hash
-    hash_hex=$(sha256sum "$temp_data_file" | awk '{print $1}')
-    
-    # Convert hex to binary and then to Base64
-    calculated_checksum=$(echo "$hash_hex" | xxd -r -p | base64 -w 0)
-    
-    # Clean up temp file
-    rm -f "$temp_data_file"
-    
-    published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
+        # Calculate checksum and encode as Base64 (to match Windows version)
+        # Use a more explicit approach to avoid encoding issues
+        temp_data_file="/tmp/checksum_data_${attempt}"
+        printf '%s' "$concatenated_data" > "$temp_data_file"
+        
+        # Calculate SHA256 hash
+        hash_hex=$(sha256sum "$temp_data_file" | awk '{print $1}')
+        
+        # Convert hex to binary and then to Base64
+        calculated_checksum=$(echo "$hash_hex" | xxd -r -p | base64 -w 0)
+        
+        # Clean up temp file
+        rm -f "$temp_data_file"
+        
+        published_checksum=$(read_hyperv_kvp "hlvmm.meta.provisioning_system_checksum")
 
-    if [[ "$calculated_checksum" != "$published_checksum" ]]; then
-        echo "ERROR: Checksum verification failed!"
-        echo "Expected: $published_checksum"
-        echo "Got:      $calculated_checksum"
-        return 1
+        if [[ "$calculated_checksum" != "$published_checksum" ]]; then
+            echo "ERROR: Checksum verification failed on attempt $attempt!"
+            echo "Expected: $published_checksum"
+            echo "Got:      $calculated_checksum"
+            return 1
+        fi
+
+        echo "Checksum verification succeeded on attempt $attempt!"
+        return 0
+    }
+
+    # Try checksum verification with retry logic
+    if ! verify_provisioning_checksum 1; then
+        echo "Initial checksum verification failed. Waiting 30 seconds before retrying..."
+        sleep 30
+        
+        # Re-scan for keys and debug print everything
+        echo "Re-scanning for keys and re-decrypting all provisioning data for retry..."
+        debug_print_all_kvp_keys 2
+        
+        # Re-scan for hlvmm.data keys
+        echo "Re-scanning for hlvmm.data keys (retry scan)..."
+        readarray -t hlvmm_data_keys < <(scan_hlvmm_data_keys)
+        
+        if [[ ${#hlvmm_data_keys[@]} -eq 0 ]]; then
+            echo "ERROR: No hlvmm.data keys found in KVP on retry. Cannot proceed with provisioning."
+            return 1
+        fi
+        
+        echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt (retry scan)"
+        for key in "${hlvmm_data_keys[@]}"; do
+            echo "  - $key"
+        done
+        
+        # Clean up previous decryption attempts
+        rm -rf "$decrypted_keys_dir"
+        mkdir -p "$decrypted_keys_dir"
+        
+        # Re-decrypt all keys
+        echo "Decrypting provisioning data keys (retry attempt)..."
+        for key in "${hlvmm_data_keys[@]}"; do
+            echo "  Processing key: $key (retry)"
+            
+            safe_filename=$(echo "$key" | sed 's/\./_/g')
+            
+            # Use the new decryption function that handles chunking properly
+            if decrypted_value=$(read_hyperv_kvp_with_decryption "$key" "$aes_key_hex"); then
+                echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
+                decrypted_length=${#decrypted_value}
+                echo "    Successfully re-decrypted $key -> $safe_filename (length: $decrypted_length, retry)"
+            else
+                echo "    ERROR: Failed to re-decrypt value for $key on retry"
+                touch "$decrypted_keys_dir/$safe_filename"
+            fi
+        done
+        
+        # Retry checksum verification
+        if ! verify_provisioning_checksum 2; then
+            echo "FATAL: Checksum verification failed after retry. Aborting provisioning."
+            return 1
+        fi
     fi
-
-    echo "Checksum verification succeeded!"
 
     # Configure local admin account if credentials are provided and non-empty
     local_admin_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_uid" | tr -d '\0\r\n' | xargs)
@@ -580,6 +855,60 @@ phase_one() {
     else
         echo "Hostname not provided or empty. Skipping hostname configuration."
     fi
+    
+    # Configure Ansible SSH access if both user and key are provided and non-empty
+    ansible_ssh_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_ansible_ssh_user" | tr -d '\0\r\n' | xargs)
+    ansible_ssh_key=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_ansible_ssh_key" | tr -d '\0\r\n' | xargs)
+    
+    if [[ -n "$ansible_ssh_user" && -n "$ansible_ssh_key" ]]; then
+        echo "Configuring Ansible SSH access for user: $ansible_ssh_user"
+        
+        # Create the user if it doesn't exist
+        if ! id "$ansible_ssh_user" &>/dev/null; then
+            useradd -m -s /bin/bash "$ansible_ssh_user"
+            echo "Created Ansible SSH user: $ansible_ssh_user"
+        else
+            echo "Ansible SSH user already exists: $ansible_ssh_user"
+        fi
+        
+        # Add user to sudo group (trying both sudo and wheel for different distributions)
+        usermod -aG sudo "$ansible_ssh_user" 2>/dev/null || usermod -aG wheel "$ansible_ssh_user" 2>/dev/null || true
+        
+        # Verify the user is in the admin/sudo group
+        if groups "$ansible_ssh_user" | grep -qE '\b(sudo|wheel)\b'; then
+            echo "User $ansible_ssh_user has sudo privileges."
+            
+            # Configure passwordless sudo for this user
+            echo "$ansible_ssh_user ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$ansible_ssh_user"
+            chmod 440 "/etc/sudoers.d/$ansible_ssh_user"
+            echo "Configured passwordless sudo for user: $ansible_ssh_user"
+        else
+            echo "WARNING: Failed to add $ansible_ssh_user to sudo group"
+        fi
+        
+        # Set up SSH authorized_keys
+        user_home=$(eval echo "~$ansible_ssh_user")
+        ssh_dir="$user_home/.ssh"
+        authorized_keys_file="$ssh_dir/authorized_keys"
+        
+        # Create .ssh directory if it doesn't exist
+        mkdir -p "$ssh_dir"
+        chown "$ansible_ssh_user:$ansible_ssh_user" "$ssh_dir"
+        chmod 700 "$ssh_dir"
+        
+        # Add the SSH public key to authorized_keys
+        echo "$ansible_ssh_key" > "$authorized_keys_file"
+        chown "$ansible_ssh_user:$ansible_ssh_user" "$authorized_keys_file"
+        chmod 600 "$authorized_keys_file"
+        
+        echo "Configured SSH public key for user: $ansible_ssh_user"
+        echo "Ansible SSH configuration completed successfully."
+    else
+        echo "Ansible SSH credentials not provided or incomplete. Skipping Ansible SSH configuration."
+        echo "  SSH User: ${ansible_ssh_user:-'<empty>'}"
+        echo "  SSH Key: ${ansible_ssh_key:+<provided>}${ansible_ssh_key:-<empty>}"
+    fi
+    
     echo "Phase one completed."
     reboot
 }
