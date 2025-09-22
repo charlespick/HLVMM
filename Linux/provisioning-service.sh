@@ -568,11 +568,6 @@ phase_one() {
         echo "ERROR: No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
         return 1
     fi
-    
-    echo "Found ${#hlvmm_data_keys[@]} hlvmm.data keys to decrypt (initial scan)"
-    for key in "${hlvmm_data_keys[@]}"; do
-        echo "  - $key"
-    done
 
     # Directory to store decrypted keys
     decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
@@ -597,8 +592,6 @@ phase_one() {
     # Save each decrypted key to a file using the actual KVP key name
     echo "Decrypting provisioning data keys..."
     for key in "${hlvmm_data_keys[@]}"; do
-        echo "  Processing key: $key"
-        
         # Create safe filename by replacing dots with underscores  
         safe_filename=$(echo "$key" | sed 's/\./_/g')
         
