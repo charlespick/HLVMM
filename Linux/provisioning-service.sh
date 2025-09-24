@@ -473,49 +473,6 @@ phase_one() {
     fi
     
     echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
-
-    # Function to debug print ALL keys in KVP
-    debug_print_all_kvp_keys() {
-        local kvp_file="/var/lib/hyperv/.kvp_pool_0"
-        
-        if [[ ! -f "$kvp_file" ]]; then
-            echo "DEBUG: KVP file not found at $kvp_file"
-            return
-        fi
-        
-        local nb=$(wc -c < "$kvp_file")
-        local nkv=$(( nb / (512+2048) ))
-        
-        local all_keys=()
-        local hlvmm_keys=()
-        local hlvmm_data_keys=()
-        local hlvmm_chunked_keys=()
-        local other_keys=()
-        
-        for n in $(seq 0 $(( $nkv - 1 )) ); do
-            local offset=$(( $n * (512 + 2048) ))
-            local k=$(dd if="$kvp_file" count=512 bs=1 skip=$offset status=none | sed 's/\x0.*//g')
-            
-            # Skip empty keys
-            if [[ -n "$k" ]]; then
-                all_keys+=("$k")
-                
-                if [[ "$k" == hlvmm.* ]]; then
-                    hlvmm_keys+=("$k")
-                    
-                    if [[ "$k" == hlvmm.data.* ]]; then
-                        if [[ "$k" =~ \._[0-9]+$ ]]; then
-                            hlvmm_chunked_keys+=("$k")
-                        else
-                            hlvmm_data_keys+=("$k")
-                        fi
-                    fi
-                else
-                    other_keys+=("$k")
-                fi
-            fi
-        done
-    }
     
     # Function to scan for hlvmm.data keys (including chunked base names)
     scan_hlvmm_data_keys() {
@@ -556,9 +513,6 @@ phase_one() {
         
         printf '%s\n' "${keys[@]}"
     }
-
-    # Initial scan and debug for attempt 1
-    debug_print_all_kvp_keys 1
     
     # Get all hlvmm.data keys dynamically instead of using hardcoded list
     echo "Scanning for hlvmm.data keys (initial scan)..."
@@ -686,10 +640,6 @@ phase_one() {
         echo "Initial checksum verification failed. Waiting 30 seconds before retrying..."
         sleep 30
         
-        # Re-scan for keys and debug print everything
-        echo "Re-scanning for keys and re-decrypting all provisioning data for retry..."
-        debug_print_all_kvp_keys 2
-        
         # Re-scan for hlvmm.data keys
         echo "Re-scanning for hlvmm.data keys (retry scan)..."
         readarray -t hlvmm_data_keys < <(scan_hlvmm_data_keys)
@@ -790,6 +740,11 @@ phase_one() {
             fi
         }
         
+        # Remove existing netplan configurations to prevent conflicts with cloud-init configs
+        # that may use MAC-based matching which breaks with dynamic MAC addressing
+        echo "Removing existing netplan configurations..."
+        rm -f /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null || true
+        
         # Build netplan configuration programmatically to avoid templating issues
         netplan_config="/etc/netplan/01-netcfg.yaml"
         
@@ -802,7 +757,9 @@ phase_one() {
             echo "      dhcp4: no"
             echo "      addresses:"
             echo "        - $(yaml_escape "$ip_address/$cidr_prefix")"
-            echo "      gateway4: $(yaml_escape "$default_gateway")"
+            echo "      routes:"
+            echo "        - to: default"
+            echo "          via: $(yaml_escape "$default_gateway")"
             
             # Only add nameservers section if we have at least one DNS server
             if [[ -n "$dns1" || -n "$dns2" ]]; then
@@ -822,6 +779,9 @@ phase_one() {
                 fi
             fi
         } > "$netplan_config"
+        
+        # Set secure file permissions to prevent security warnings
+        chmod 600 "$netplan_config"
         
         # Validate the generated netplan configuration
         if netplan generate 2>/dev/null; then
@@ -915,6 +875,13 @@ phase_two() {
     if [[ -d "$decrypted_keys_dir" ]]; then
         rm -rf "$decrypted_keys_dir"
         echo "Deleted decrypted KVP data folder: $decrypted_keys_dir"
+    fi
+
+    # Delete the keys folder
+    key_dir="/var/lib/hyperv/keys"
+    if [[ -d "$key_dir" ]]; then
+        rm -rf "$key_dir"
+        echo "Deleted keys folder: $key_dir"
     fi
 
     # Delete the service and copied script
