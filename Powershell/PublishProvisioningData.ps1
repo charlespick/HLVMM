@@ -232,6 +232,8 @@ function Publish-KvpEncryptedValue {
     # Check if value needs chunking (longer than 100 characters)
     if ($Value.Length -le 100) {
         # Value is short enough, encrypt and publish normally
+        $aes = $null
+        $encryptor = $null
         try {
             $aes = New-Object System.Security.Cryptography.AesManaged
             $aes.Key = [Convert]::FromBase64String($AesKey)
@@ -250,6 +252,14 @@ function Publish-KvpEncryptedValue {
         }
         catch {
             throw "Failed to encrypt the value: $_"
+        }
+        finally {
+            if ($encryptor) {
+                $encryptor.Dispose()
+            }
+            if ($aes) {
+                $aes.Dispose()
+            }
         }
 
         # Publish the encrypted value to the KVP for the specified key
@@ -281,6 +291,8 @@ function Publish-KvpEncryptedValue {
             $chunkKey = "$Key._$i"
             
             # Encrypt this chunk
+            $aes = $null
+            $encryptor = $null
             try {
                 $aes = New-Object System.Security.Cryptography.AesManaged
                 $aes.Key = [Convert]::FromBase64String($AesKey)
@@ -299,6 +311,14 @@ function Publish-KvpEncryptedValue {
             }
             catch {
                 throw "Failed to encrypt chunk $i for key '$Key': $_"
+            }
+            finally {
+                if ($encryptor) {
+                    $encryptor.Dispose()
+                }
+                if ($aes) {
+                    $aes.Dispose()
+                }
             }
 
             # Publish the encrypted chunk to the KVP
@@ -460,13 +480,20 @@ Sort-Object { $_.KvpKey }
 $provisioningData = ($dataKeysForChecksum | ForEach-Object { $_.Value }) -join "|"
 
 # Compute a checksum of the concatenated data
+$sha256 = $null
 try {
     $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
-    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($utf8Bytes)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $hash = $sha256.ComputeHash($utf8Bytes)
     $checksum = [Convert]::ToBase64String($hash)
 }
 catch {
     throw "Failed to compute the checksum: $_"
+}
+finally {
+    if ($sha256) {
+        $sha256.Dispose()
+    }
 }
 
 # Publish the checksum to the KVP
@@ -483,12 +510,19 @@ catch {
 #region AES Key Generation and Publishing
 
 # Generate a new AES key
+$aesManaged = $null
 try {
-    $aesKey = [System.Convert]::ToBase64String((New-Object System.Security.Cryptography.AesManaged).Key)
+    $aesManaged = New-Object System.Security.Cryptography.AesManaged
+    $aesKey = [System.Convert]::ToBase64String($aesManaged.Key)
     Write-Host "Generated new AES key."
 }
 catch {
     throw "Failed to generate AES key: $_"
+}
+finally {
+    if ($aesManaged) {
+        $aesManaged.Dispose()
+    }
 }
 
 # Retrieve the guest provisioning public key from the KVP
@@ -504,6 +538,7 @@ catch {
 }
 
 # Wrap the AES key using the guest provisioning public key
+$rsa = $null
 try {
     # Build an RSA object from the guest provisioning public key
     $rsa = Get-RsaFromGuestProvisioningKey -PublicKeyBase64 $guestProvisioningPublicKey
@@ -513,6 +548,11 @@ try {
 }
 catch {
     throw "Failed to wrap the AES key: $($_.Exception.Message)"
+}
+finally {
+    if ($rsa) {
+        $rsa.Dispose()
+    }
 }
 
 # Publish the wrapped AES key to the KVP

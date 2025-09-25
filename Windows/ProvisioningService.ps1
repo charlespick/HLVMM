@@ -292,32 +292,44 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         Write-Host "Provisioning system version verified: $expectedVersion"
 
         # Generate RSA key pair and keep them in memory
-        $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
-        $publicKey = $rsa.ExportCspBlob($false)
+        $rsa = $null
+        try {
+            $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
+            $publicKey = $rsa.ExportCspBlob($false)
 
-        # Convert public key to Base64 and write it to the KVP
-        $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
-        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
+            # Convert public key to Base64 and write it to the KVP
+            $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
+            Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
 
-        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value "waitingforaeskey"
+            Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value "waitingforaeskey"
 
-        while ($true) {
-            $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
-            if ($state -eq "provisioningdatapublished") {
-                break
+            while ($true) {
+                $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
+                if ($state -eq "provisioningdatapublished") {
+                    break
+                }
+                Start-Sleep -Seconds 5
             }
-            Start-Sleep -Seconds 5
-        }
 
-        # Read the shared AES key from "hlvmm.meta.shared_aes_key"
-        $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
-        if (-not $sharedAesKeyBase64) {
-            Write-Host "Failed to retrieve shared AES key. Terminating program."
+            # Read the shared AES key from "hlvmm.meta.shared_aes_key"
+            $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
+            if (-not $sharedAesKeyBase64) {
+                Write-Host "Failed to retrieve shared AES key. Terminating program."
+                exit
+            }
+
+            $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
+            $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
+        }
+        catch {
+            Write-Host "Failed to generate or use RSA key pair: $_"
             exit
         }
-
-        $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
-        $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
+        finally {
+            if ($rsa) {
+                $rsa.Dispose()
+            }
+        }
 
         # Get all hlvmm.data keys dynamically instead of using hardcoded list  
         # Exclude chunked keys (those ending with ._[0-9]) from the main list
@@ -351,7 +363,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                     $safeFileName = $key -replace '\.', '_'
                     $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$safeFileName.txt")
                     [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
-                    Write-Host "Decrypted and saved: $key -> $safeFileName.txt"
+                    Write-Host "Successfully processed key: $key"
                 } else {
                     Write-Host "Failed to retrieve value for key: $key. Skipping..."
                 }
@@ -368,12 +380,24 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $sortedDataKeys = $dataKeys | Sort-Object { $_.Key }
         $concatenatedData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
 
-        $sha256 = [System.Security.Cryptography.SHA256]::Create()
-        $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
+        $sha256 = $null
+        try {
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
+            $computedHashBase64 = [Convert]::ToBase64String($computedHash)
+        }
+        catch {
+            Write-Host "Failed to compute checksum: $_"
+            exit
+        }
+        finally {
+            if ($sha256) {
+                $sha256.Dispose()
+            }
+        }
 
         $provisioningSystemChecksum = Read-HyperVKvp -Key "hlvmm.meta.provisioning_system_checksum" -ErrorAction SilentlyContinue
 
-        $computedHashBase64 = [Convert]::ToBase64String($computedHash)
         if ($computedHashBase64 -ne $provisioningSystemChecksum) {
             Write-Host "Checksum mismatch. Terminating program."
             exit
@@ -439,29 +463,44 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                 # Retrieve the password for the account
                 $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_la_pw.txt"
                 if (Test-Path $guestLaPwPath) {
-                    $guestLaPw = Get-Content -Path $guestLaPwPath
-                    if ($guestLaPw) {
+                    $guestLaPwSecure = Get-Content -Path $guestLaPwPath | ConvertTo-SecureString -AsPlainText -Force
+                    if ($guestLaPwSecure) {
                         # Check if the user already exists
                         $user = Get-LocalUser -Name $guestLaUid -ErrorAction SilentlyContinue
                         if (-not $user) {
                             # Create the user if it doesn't exist
-                            New-LocalUser -Name $guestLaUid -Password (ConvertTo-SecureString -String $guestLaPw -AsPlainText -Force) -PasswordNeverExpires -ErrorAction Stop
-                            Write-Host "Local account $guestLaUid created."
+                            try {
+                                New-LocalUser -Name $guestLaUid -Password $guestLaPwSecure -PasswordNeverExpires -ErrorAction Stop
+                                Write-Host "Local account $guestLaUid created."
+                            }
+                            catch {
+                                Write-Host "Failed to create local account $guestLaUid : $_"
+                            }
                         }
                         else {
                             # Update the password for the existing user
-                            $user | Set-LocalUser -Password (ConvertTo-SecureString -String $guestLaPw -AsPlainText -Force)
-                            Write-Host "Password updated for existing user $guestLaUid."
+                            try {
+                                $user | Set-LocalUser -Password $guestLaPwSecure -ErrorAction Stop
+                                Write-Host "Password updated for existing user $guestLaUid."
+                            }
+                            catch {
+                                Write-Host "Failed to update password for user $guestLaUid : $_"
+                            }
                         }
 
                         # Ensure the user is an administrator
-                        $adminGroup = Get-LocalGroup -Name "Administrators"
-                        if (-not ($adminGroup | Get-LocalGroupMember | Where-Object { $_.Name -like "*$guestLaUid" })) {
-                            Add-LocalGroupMember -Group "Administrators" -Member $guestLaUid -ErrorAction Stop
-                            Write-Host "User $guestLaUid added to Administrators group."
+                        try {
+                            $adminGroup = Get-LocalGroup -Name "Administrators"
+                            if (-not ($adminGroup | Get-LocalGroupMember | Where-Object { $_.Name -like "*$guestLaUid" })) {
+                                Add-LocalGroupMember -Group "Administrators" -Member $guestLaUid -ErrorAction Stop
+                                Write-Host "User $guestLaUid added to Administrators group."
+                            }
+                            else {
+                                Write-Host "User $guestLaUid is already an administrator."
+                            }
                         }
-                        else {
-                            Write-Host "User $guestLaUid is already an administrator."
+                        catch {
+                            Write-Host "Failed to configure administrator privileges for $guestLaUid : $_"
                         }
                     }
                     else {
@@ -480,6 +519,11 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             Write-Host "hlvmm.data.guest_la_uid key does not exist. Skipping local account configuration."
         }
         #endregion
+
+        # Clear sensitive variables from memory
+        if (Get-Variable -Name "unwrappedAesKey" -ErrorAction SilentlyContinue) {
+            Remove-Variable -Name "unwrappedAesKey" -Force
+        }
 
         Restart-Computer -Force
     }
@@ -504,8 +548,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                     if ($guestDomainJoinUid -and $guestDomainJoinPw -and $guestDomainJoinOU) {
                         # Attempt to join the domain
                         try {
-                            $securePw = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
-                            $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $securePw)
+                            $guestDomainJoinPwSecure = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
+                            $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $guestDomainJoinPwSecure)
 
                             # Wait until the domain controller is reachable via ping
                             $maxAttempts = 60
@@ -526,7 +570,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
                                 return
                             }
 
-                            netdom join $env:COMPUTERNAME /domain:$guestDomainJoinTarget /OU:$guestDomainJoinOU /userd:$guestDomainJoinUid /passwordd:$guestDomainJoinPw
+                            # Use Add-Computer instead of netdom for secure domain join
+                            Add-Computer -DomainName $guestDomainJoinTarget -Credential $credential -OUPath $guestDomainJoinOU -Force -ErrorAction Stop
 
                             Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
                             "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8

@@ -81,6 +81,8 @@ read_hyperv_kvp_with_decryption() {
         for chunk_index in $(seq 0 $(( ${#chunks[@]} - 1 )) ); do
             if [[ -n "${chunks[$chunk_index]}" ]]; then
                 local temp_decrypted="/tmp/decrypted_chunk_${chunk_index}_$$"
+                touch "$temp_decrypted"
+                chmod 600 "$temp_decrypted"
                 
                 if decrypt_single_value "${chunks[$chunk_index]}" "$aes_key_hex" "$temp_decrypted"; then
                     # Append this chunk's plaintext to the result
@@ -112,6 +114,10 @@ decrypt_single_value() {
     local temp_encrypted="/tmp/encrypted_single_$$"
     local temp_iv="/tmp/iv_single_$$"
     local temp_ciphertext="/tmp/ciphertext_single_$$"
+    
+    # Create temp files with secure permissions
+    touch "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
+    chmod 600 "$temp_encrypted" "$temp_iv" "$temp_ciphertext"
     
     # Decode base64 to temporary file
     echo "$encrypted_value" | base64 -d > "$temp_encrypted"
@@ -392,6 +398,7 @@ phase_one() {
     echo "Generating RSA key pair..."
     key_dir="/var/lib/hyperv/keys"
     mkdir -p "$key_dir"
+    chmod 700 "$key_dir"
     private_key="$key_dir/private_key.pem"
     public_key="$key_dir/public_key.pem"
     
@@ -458,6 +465,8 @@ phase_one() {
     
     # Use temporary file to handle binary data properly (avoids null byte issues in command substitution)
     temp_aes_key="/tmp/decrypted_aes_key"
+    touch "$temp_aes_key"
+    chmod 600 "$temp_aes_key"
     if ! echo "$shared_aes_key" | base64 -d | openssl pkeyutl -decrypt -inkey "$private_key" -pkeyopt rsa_padding_mode:pkcs1 > "$temp_aes_key"; then
         echo "ERROR: Failed to decrypt AES key"
         rm -f "$temp_aes_key"
@@ -526,6 +535,7 @@ phase_one() {
     # Directory to store decrypted keys
     decrypted_keys_dir="/var/lib/hyperv/decrypted_keys"
     mkdir -p "$decrypted_keys_dir"
+    chmod 700 "$decrypted_keys_dir"
 
     # Convert decrypted AES key to hex format for OpenSSL
     # Read the binary AES key from file and convert to hex
@@ -552,8 +562,7 @@ phase_one() {
         # Use the new decryption function that handles chunking properly
         if decrypted_value=$(read_hyperv_kvp_with_decryption "$key" "$aes_key_hex"); then
             echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-            decrypted_length=${#decrypted_value}
-            echo "    Successfully decrypted $key -> $safe_filename (length: $decrypted_length)"
+            echo "    Successfully decrypted $key -> $safe_filename"
         else
             echo "    ERROR: Failed to decrypt value for $key"
             touch "$decrypted_keys_dir/$safe_filename"
@@ -657,6 +666,7 @@ phase_one() {
         # Clean up previous decryption attempts
         rm -rf "$decrypted_keys_dir"
         mkdir -p "$decrypted_keys_dir"
+        chmod 700 "$decrypted_keys_dir"
         
         # Re-decrypt all keys
         echo "Decrypting provisioning data keys (retry attempt)..."
@@ -668,8 +678,7 @@ phase_one() {
             # Use the new decryption function that handles chunking properly
             if decrypted_value=$(read_hyperv_kvp_with_decryption "$key" "$aes_key_hex"); then
                 echo "$decrypted_value" > "$decrypted_keys_dir/$safe_filename"
-                decrypted_length=${#decrypted_value}
-                echo "    Successfully re-decrypted $key -> $safe_filename (length: $decrypted_length, retry)"
+                echo "    Successfully re-decrypted $key -> $safe_filename (retry)"
             else
                 echo "    ERROR: Failed to re-decrypt value for $key on retry"
                 touch "$decrypted_keys_dir/$safe_filename"
@@ -689,11 +698,23 @@ phase_one() {
 
     if [[ -n "$local_admin_user" && -n "$local_admin_password" ]]; then
         if id "$local_admin_user" &>/dev/null; then
-            echo "$local_admin_user:$local_admin_password" | chpasswd
+            # Use secure temp file for chpasswd to avoid command line exposure
+            local temp_passwd="/tmp/chpasswd_$$"
+            touch "$temp_passwd"
+            chmod 600 "$temp_passwd"
+            echo "$local_admin_user:$local_admin_password" > "$temp_passwd"
+            chpasswd < "$temp_passwd"
+            rm -f "$temp_passwd"
             echo "Updated password for existing user: $local_admin_user"
         else
             useradd -m -s /bin/bash "$local_admin_user"
-            echo "$local_admin_user:$local_admin_password" | chpasswd
+            # Use secure temp file for chpasswd to avoid command line exposure
+            local temp_passwd="/tmp/chpasswd_$$"
+            touch "$temp_passwd"
+            chmod 600 "$temp_passwd"
+            echo "$local_admin_user:$local_admin_password" > "$temp_passwd"
+            chpasswd < "$temp_passwd"
+            rm -f "$temp_passwd"
             # Add to sudo group for administrative privileges
             usermod -aG sudo "$local_admin_user" 2>/dev/null || usermod -aG wheel "$local_admin_user" 2>/dev/null || true
             echo "Created local admin account: $local_admin_user"
@@ -707,8 +728,6 @@ phase_one() {
         fi
     else
         echo "Local admin credentials not provided or incomplete. Skipping local account configuration."
-        echo "  Username: ${local_admin_user:-'<empty>'}"
-        echo "  Password: ${local_admin_password:+<provided>}${local_admin_password:-<empty>}"
     fi
 
     # Ignore domain join parameters
@@ -858,8 +877,6 @@ phase_one() {
         echo "Ansible SSH configuration completed successfully."
     else
         echo "Ansible SSH credentials not provided or incomplete. Skipping Ansible SSH configuration."
-        echo "  SSH User: ${ansible_ssh_user:-'<empty>'}"
-        echo "  SSH Key: ${ansible_ssh_key:+<provided>}${ansible_ssh_key:-<empty>}"
     fi
     
     echo "Phase one completed."

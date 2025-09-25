@@ -147,7 +147,7 @@
       environment:
         GuestLaPw: "{{ guest_la_pw }}"
         GuestDomainJoinPw: "{{ effective_guest_domain_joinpw | default('') }}"
-      # no_log: true
+      no_log: true
 
     - block:
         - name: Enable CredSSP server role
