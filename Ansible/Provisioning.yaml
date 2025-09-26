@@ -3,7 +3,7 @@
   hosts: "{{ hyperv_host }}"
   gather_facts: no
 
-  tasks:
+  pre_tasks:
     - name: Determine OS Family from Image Name
       set_fact:
         os_family: >-
@@ -15,48 +15,12 @@
           {{ fail('Unsupported OS detected in image_name: ' + image_name + '. Supported OS families: Windows*, Microsoft Windows*, Ubuntu*, Red Hat Enterprise Linux*, RHEL*, CentOS*, Rocky Linux*, AlmaLinux*, Oracle Linux*, Debian*, SUSE*, openSUSE*, Fedora*') }}
           {%- endif -%}
 
-
-    - name: Resolve effective domain join variables
+    - name: Set domain join credentials from environment if available
       set_fact:
-        effective_guest_domain_joinuid: >-
-          {%- if use_default_domain_credentials is defined and use_default_domain_credentials == "Yes" -%}
-          {{ lookup('env', 'default_guest_domain_joinuid') }}
-          {%- else -%}
-          {{ guest_domain_joinuid | default('') }}
-          {%- endif -%}
-        effective_guest_domain_joinpw: >-
-          {%- if use_default_domain_credentials is defined and use_default_domain_credentials == "Yes" -%}
-          {{ lookup('env', 'default_guest_domain_joinpw') }}
-          {%- else -%}
-          {{ guest_domain_joinpw | default('') }}
-          {%- endif -%}
-        effective_guest_domain_jointarget: >-
-          {%- if use_default_domain_credentials is defined and use_default_domain_credentials == "Yes" -%}
-          {{ default_guest_domain_jointarget }}
-          {%- else -%}
-          {{ guest_domain_jointarget | default('') }}
-          {%- endif -%}
-        effective_guest_domain_joinou: >-
-          {%- if use_default_domain_ou is defined and use_default_domain_ou == "Yes" -%}
-          {{ default_guest_domain_joinou }}
-          {%- else -%}
-          {{ guest_domain_joinou | default('') }}
-          {%- endif -%}
-
-    - name: Resolve effective Ansible SSH variables
-      set_fact:
-        effective_cnf_ansible_ssh_user: >-
-          {%- if use_default_ansible_creds is defined and use_default_ansible_creds == "Yes" -%}
-          {{ default_ansible_ssh_user }}
-          {%- else -%}
-          {{ cnf_ansible_ssh_user | default('') }}
-          {%- endif -%}
-        effective_cnf_ansible_ssh_key: >-
-          {%- if use_default_ansible_creds is defined and use_default_ansible_creds == "Yes" -%}
-          {{ default_ansible_ssh_key }}
-          {%- else -%}
-          {{ cnf_ansible_ssh_key | default('') }}
-          {%- endif -%}
+        guest_domain_joinuid: "{{ lookup('env', 'guest_domain_joinuid') }}"
+        guest_domain_joinpw: "{{ lookup('env', 'guest_domain_joinpw') }}"
+      when: 
+        - lookup('env', 'guest_domain_joinpw') | length > 0
 
     - name: Clear domain join data for Linux systems
       block:
@@ -67,9 +31,7 @@
             (guest_domain_joinuid is defined and guest_domain_joinuid|length > 0) or
             (guest_domain_joinpw is defined and guest_domain_joinpw|length > 0) or
             (guest_domain_jointarget is defined and guest_domain_jointarget|length > 0) or
-            (guest_domain_joinou is defined and guest_domain_joinou|length > 0) or
-            (use_default_domain_credentials is defined and use_default_domain_credentials == "Yes") or
-            (use_default_domain_ou is defined and use_default_domain_ou == "Yes")
+            (guest_domain_joinou is defined and guest_domain_joinou|length > 0)
 
         - name: Clear domain join variables
           set_fact:
@@ -77,10 +39,6 @@
             guest_domain_joinpw: ""
             guest_domain_jointarget: ""
             guest_domain_joinou: ""
-            effective_guest_domain_joinuid: ""
-            effective_guest_domain_joinpw: ""
-            effective_guest_domain_jointarget: ""
-            effective_guest_domain_joinou: ""
       when: os_family == "linux"
 
     - name: Clear Ansible SSH credentials for Windows systems
@@ -90,17 +48,15 @@
             msg: "WARNING: Ansible SSH credentials are not supported for Windows systems. Clearing all Ansible SSH variables."
           when: >
             (cnf_ansible_ssh_user is defined and cnf_ansible_ssh_user|length > 0) or
-            (cnf_ansible_ssh_key is defined and cnf_ansible_ssh_key|length > 0) or
-            (use_default_ansible_creds is defined and use_default_ansible_creds == "Yes")
+            (cnf_ansible_ssh_key is defined and cnf_ansible_ssh_key|length > 0)
 
         - name: Clear Ansible SSH variables
           set_fact:
             cnf_ansible_ssh_user: ""
             cnf_ansible_ssh_key: ""
-            effective_cnf_ansible_ssh_user: ""
-            effective_cnf_ansible_ssh_key: ""
       when: os_family == "windows"
 
+  tasks:
     - name: Copy Image
       ansible.windows.win_command: >
         powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager\CopyImage.ps1"
@@ -139,14 +95,14 @@
         {% if guest_v4_dns1 is defined and guest_v4_dns1|length > 0 %}-GuestV4Dns1 {{ guest_v4_dns1 }}{% endif %}
         {% if guest_v4_dns2 is defined and guest_v4_dns2|length > 0 %}-GuestV4Dns2 {{ guest_v4_dns2 }}{% endif %}
         {% if guest_net_dnssuffix is defined and guest_net_dnssuffix|length > 0 %}-GuestNetDnsSuffix {{ guest_net_dnssuffix }}{% endif %}
-        {% if effective_guest_domain_jointarget is defined and effective_guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ effective_guest_domain_jointarget }}{% endif %}
-        {% if effective_guest_domain_joinuid is defined and effective_guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ effective_guest_domain_joinuid }}{% endif %}
-        {% if effective_guest_domain_joinou is defined and effective_guest_domain_joinou|length > 0 %}-GuestDomainJoinOU {{ effective_guest_domain_joinou }}{% endif %}
-        {% if effective_cnf_ansible_ssh_user is defined and effective_cnf_ansible_ssh_user|length > 0 %}-AnsibleSshUser {{ effective_cnf_ansible_ssh_user }}{% endif %}
-        {% if effective_cnf_ansible_ssh_key is defined and effective_cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey "{{ effective_cnf_ansible_ssh_key }}"{% endif %}
+        {% if guest_domain_jointarget is defined and guest_domain_jointarget|length > 0 %}-GuestDomainJoinTarget {{ guest_domain_jointarget }}{% endif %}
+        {% if guest_domain_joinuid is defined and guest_domain_joinuid|length > 0 %}-GuestDomainJoinUid {{ guest_domain_joinuid }}{% endif %}
+        {% if guest_domain_joinou is defined and guest_domain_joinou|length > 0 %}-GuestDomainJoinOU {{ guest_domain_joinou }}{% endif %}
+        {% if cnf_ansible_ssh_user is defined and cnf_ansible_ssh_user|length > 0 %}-AnsibleSshUser {{ cnf_ansible_ssh_user }}{% endif %}
+        {% if cnf_ansible_ssh_key is defined and cnf_ansible_ssh_key|length > 0 %}-AnsibleSshKey "{{ cnf_ansible_ssh_key }}"{% endif %}
       environment:
         GuestLaPw: "{{ guest_la_pw }}"
-        GuestDomainJoinPw: "{{ effective_guest_domain_joinpw | default('') }}"
+        GuestDomainJoinPw: "{{ guest_domain_joinpw | default('') }}"
       no_log: true
 
     - block:
