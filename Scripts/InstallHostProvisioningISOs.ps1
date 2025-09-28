@@ -57,46 +57,29 @@ if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
     # Define the ISO files to download
     $isoFiles = @("LinuxProvisioning.iso", "WindowsProvisioning.iso")
 
-    # Download each ISO file from the appropriate endpoint
+    # Download each ISO file from the appropriate source
     foreach ($isoFile in $isoFiles) {
         $downloadUrl = "$baseDownloadUrl/$isoFile"
         $localPath = Join-Path $installDirectory $isoFile
         
-        Write-Host "Downloading $isoFile from $(if ($Develop) { 'development endpoint' } else { 'latest release' })..."
+        Write-Host "Downloading $isoFile from $(if ($Develop) { 'GitHub Pages (development)' } else { 'GitHub Releases (latest)' })..."
         try {
-            # For development builds, we might need to handle redirects from GitHub Pages
-            if ($Develop) {
-                # GitHub Pages may serve HTML redirect pages, so we need to handle potential redirects
-                $webRequest = [System.Net.WebRequest]::Create($downloadUrl)
-                $webRequest.AllowAutoRedirect = $true
-                $webRequest.UserAgent = "PowerShell-HLVMM-Installer"
-                
-                try {
-                    $response = $webRequest.GetResponse()
-                    $responseStream = $response.GetResponseStream()
-                    $fileStream = [System.IO.File]::Create($localPath)
-                    $responseStream.CopyTo($fileStream)
-                    $fileStream.Close()
-                    $responseStream.Close()
-                    $response.Close()
-                    Write-Host "Downloaded $isoFile successfully."
-                }
-                catch {
-                    # Fallback to Invoke-WebRequest if the direct approach fails
-                    Write-Host "Trying fallback download method..."
-                    Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing -UserAgent "PowerShell-HLVMM-Installer"
-                    Write-Host "Downloaded $isoFile successfully using fallback method."
-                }
-            }
-            else {
-                # For production, use the standard GitHub releases endpoint
-                Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing
-                Write-Host "Downloaded $isoFile successfully."
-            }
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing
+            Write-Host "Downloaded $isoFile successfully."
         }
         catch {
             Write-Warning "Failed to download $isoFile`: $($_.Exception.Message)"
             Write-Host "Download URL was: $downloadUrl"
+            
+            # For development builds, provide additional troubleshooting info
+            if ($Develop) {
+                Write-Host ""
+                Write-Host "If you're seeing 404 errors for development builds:"
+                Write-Host "1. Check if GitHub Pages is enabled for this repository"
+                Write-Host "2. Verify the devel branch has been built recently"
+                Write-Host "3. Visit https://charlespick.github.io/HLVMM/latest/ to see available files"
+                Write-Host ""
+            }
         }
     }
 
