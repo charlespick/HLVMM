@@ -1,49 +1,33 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Region,
-
-    [Parameter(Mandatory = $true)]
-    [string]$BucketName,
-
-    [Parameter(Mandatory = $true)]
-    [string]$AccessKeyId,
-
-    [Parameter(Mandatory = $true)]
-    [string]$FolderPath,
-
     [bool]$Develop = $false
 )
 
 # Define variables
+$branchRef = if ($Develop) { "devel" } else { "main" }
+$releaseTag = if ($Develop) { "development" } else { "release" }
 $directoryName = if ($Develop) { "Home Lab Virtual Machine Manager (Devel)" } else { "Home Lab Virtual Machine Manager" }
 
 $localVersionFile = "C:\Program Files\$directoryName\isosversion"
+$repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/$branchRef/version"
 $installDirectory = "C:\Program Files\$directoryName"
-
-# Source AWS Secret Access Key from environment variable
-$AccessKeySecret = $env:AWS_SECRET_ACCESS_KEY
-
-if (-not $AccessKeySecret) {
-    Write-Error "AWS_SECRET_ACCESS_KEY environment variable is not set."
-    exit 1
-}
 
 function Compare-Version {
     param (
         [string]$localVersion,
-        [string]$awsVersion
+        [string]$repoVersion
     )
 
-    if ([string]::IsNullOrWhiteSpace($awsVersion)) {
-        throw "AWS version is null or empty. Cannot compare."
+    if ([string]::IsNullOrWhiteSpace($repoVersion)) {
+        throw "Repository version is null or empty. Cannot compare."
     }
     if ([string]::IsNullOrWhiteSpace($localVersion)) {
         throw "Local version is null or empty. Cannot compare."
     }
 
-    return [version]$awsVersion -gt [version]$localVersion
+    return [version]$repoVersion -gt [version]$localVersion
 }
 
+# Get local version
 if (Test-Path $localVersionFile) {
     $localVersion = Get-Content -Path $localVersionFile -Raw
 }
@@ -51,29 +35,42 @@ else {
     $localVersion = "0.0.0"
 }
 
-$env:AWS_ACCESS_KEY_ID = $AccessKeyId
-$env:AWS_SECRET_ACCESS_KEY = $AccessKeySecret
-$env:AWS_DEFAULT_REGION = $Region
+# Get repo version
+$repoVersion = Invoke-RestMethod -Uri ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random)) -Method Get -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache"; "User-Agent" = "PowerShell" } 
 
-$awsVersionFileKey = "$FolderPath/version"
-$awsVersion = aws s3 cp "s3://$bucketName/$awsVersionFileKey" - 
+# Compare versions
+if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
+    Write-Host "Newer version found. Updating..."
 
-if (Compare-Version -localVersion $localVersion -awsVersion $awsVersion) {
     # Delete all .ISO files in the installation directory
     Get-ChildItem -Path $installDirectory -Filter *.ISO | Remove-Item -Force
 
-    # List all ISO files in the remote S3 folder
-    $isoFiles = aws s3 ls "s3://$BucketName/$FolderPath/" | Where-Object { $_ -match "\.ISO" } | ForEach-Object {
-        ($_ -split '\s+')[-1]
+    # Ensure install directory exists
+    if (-not (Test-Path $installDirectory)) {
+        New-Item -Path $installDirectory -ItemType Directory -Force | Out-Null
     }
 
+    # Define the ISO files to download
+    $isoFiles = @("LinuxProvisioning.iso", "WindowsProvisioning.iso")
+
+    # Download each ISO file from GitHub releases
     foreach ($isoFile in $isoFiles) {
-        $remotePath = "s3://$BucketName/$FolderPath/$isoFile"
+        $downloadUrl = "https://github.com/charlespick/HLVMM/releases/download/$releaseTag/$isoFile"
         $localPath = Join-Path $installDirectory $isoFile
-        aws s3 cp $remotePath $localPath
+        
+        Write-Host "Downloading $isoFile..."
+        try {
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing
+            Write-Host "Downloaded $isoFile successfully."
+        }
+        catch {
+            Write-Warning "Failed to download $isoFile`: $($_.Exception.Message)"
+        }
     }
 
-    Set-Content -Path $localVersionFile -Value $awsVersion
+    # Save the new version
+    Set-Content -Path $localVersionFile -Value $repoVersion -Force
+
     Write-Host "Update complete."
 }
 else {
