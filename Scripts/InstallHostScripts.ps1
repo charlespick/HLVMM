@@ -38,7 +38,17 @@ else {
 }
 
 # Get repo version
-$repoVersion = Invoke-RestMethod -Uri ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random)) -Method Get -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache"; "User-Agent" = "PowerShell" }
+$repoVersionParams = @{
+    Uri     = ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random))
+    Method  = 'Get'
+    UseBasicParsing = $true
+    Headers = @{
+        "Cache-Control" = "no-cache"
+        "Pragma"       = "no-cache"
+        "User-Agent"   = "PowerShell"
+    }
+}
+$repoVersion = Invoke-RestMethod @repoVersionParams
 
 # Compare versions
 if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
