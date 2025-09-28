@@ -89,69 +89,39 @@ jobs:
         ls -la ISOs/
         
     # RELEASE LOGIC
-    - name: Determine release tag and name
+    - name: Determine release strategy
       id: release_info
       run: |
         if [[ "${{ github.ref_name }}" == "main" ]]; then
-          echo "tag_name=rolling" >> $GITHUB_OUTPUT
-          echo "release_name=Rolling Release" >> $GITHUB_OUTPUT
+          echo "create_standard_release=true" >> $GITHUB_OUTPUT
+          echo "create_devel_artifacts=false" >> $GITHUB_OUTPUT
           echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          echo "create_release=true" >> $GITHUB_OUTPUT
         elif [[ "${{ github.ref_name }}" == "devel" ]]; then
-          echo "tag_name=development" >> $GITHUB_OUTPUT
-          echo "release_name=Development Release" >> $GITHUB_OUTPUT
+          echo "create_standard_release=false" >> $GITHUB_OUTPUT
+          echo "create_devel_artifacts=true" >> $GITHUB_OUTPUT
           echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          echo "create_release=true" >> $GITHUB_OUTPUT
         else
-          echo "tag_name=" >> $GITHUB_OUTPUT
-          echo "release_name=" >> $GITHUB_OUTPUT
+          echo "create_standard_release=false" >> $GITHUB_OUTPUT
+          echo "create_devel_artifacts=false" >> $GITHUB_OUTPUT
           echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          echo "create_release=false" >> $GITHUB_OUTPUT
         fi
         
-    - name: Delete existing release (if exists)
-      if: github.event_name == 'push' && steps.release_info.outputs.create_release == 'true'
+    # MAIN BRANCH: Create standard release (uses GitHub's /latest endpoint)
+    - name: Create standard release for main
+      if: github.event_name == 'push' && steps.release_info.outputs.create_standard_release == 'true'
       run: |
-        TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
-        
-        # Check if release exists and delete it
-        if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-          echo "Deleting existing release: $TAG_NAME"
-          gh release delete "$TAG_NAME" --yes
-        else
-          echo "Release $TAG_NAME does not exist, creating new one"
-        fi
-        
-        # Delete the tag if it exists
-        if git tag -l | grep -q "^${TAG_NAME}$"; then
-          echo "Deleting existing local tag: $TAG_NAME"
-          git tag -d "$TAG_NAME" || true
-        fi
-        
-        # Delete the remote tag if it exists
-        if git ls-remote --exit-code origin refs/tags/"$TAG_NAME" >/dev/null 2>&1; then
-          echo "Deleting existing remote tag: $TAG_NAME"
-          git push origin --delete "$TAG_NAME" || true
-        fi
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Create new release
-      if: github.event_name == 'push' && steps.release_info.outputs.create_release == 'true'
-      run: |
-        TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
-        RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
-        IS_PRERELEASE="${{ steps.release_info.outputs.is_prerelease }}"
-        
         # Get version from version file (now contains the bumped version)
         VERSION_CONTENT=""
         if [ -f "version" ]; then
           VERSION_CONTENT=$(cat version)
         fi
         
+        # Use version as tag name for standard releases
+        TAG_NAME="v${VERSION_CONTENT}"
+        
         # Create release notes
         cat << EOF > release_notes.md
-        ## Automated Build - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        ## Release ${VERSION_CONTENT} - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
         
         **Branch:** \`${{ github.ref_name }}\`
         **Commit:** \`${{ github.sha }}\`
@@ -166,27 +136,150 @@ jobs:
         - ISO Tools: xorriso, genisoimage
         - Workflow: ${{ github.workflow }}
         - Run: #${{ github.run_number }}
-        EOF
-
-        # Create prerelease flag
-        PRERELEASE_FLAG=""
-        if [ "$IS_PRERELEASE" == "true" ]; then
-          PRERELEASE_FLAG="--prerelease"
-        fi
         
-        # Create the tag on the current commit first
-        git tag "$TAG_NAME"
-        git push origin "$TAG_NAME" --force
+        ### Download URLs
+        These artifacts are available at stable URLs:
+        - Windows ISO: \`https://github.com/${{ github.repository }}/releases/latest/download/WindowsProvisioning.iso\`
+        - Linux ISO: \`https://github.com/${{ github.repository }}/releases/latest/download/LinuxProvisioning.iso\`
+        EOF
         
         # Create the release
         gh release create "$TAG_NAME" \
-          --title "$RELEASE_NAME" \
+          --title "Release $VERSION_CONTENT" \
           --notes-file release_notes.md \
-          $PRERELEASE_FLAG \
           ISOs/WindowsProvisioning.iso \
           ISOs/LinuxProvisioning.iso
           
-        echo "Created release: $RELEASE_NAME ($TAG_NAME)"
+        echo "Created standard release: $TAG_NAME"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # DEVEL BRANCH: Create artifacts and update GitHub Pages redirect        
+    - name: Upload devel artifacts
+      if: github.event_name == 'push' && steps.release_info.outputs.create_devel_artifacts == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: devel-provisioning-isos-${{ github.run_number }}
+        path: |
+          ISOs/WindowsProvisioning.iso
+          ISOs/LinuxProvisioning.iso
+        retention-days: 7
+
+    - name: Update GitHub Pages redirect for devel
+      if: github.event_name == 'push' && steps.release_info.outputs.create_devel_artifacts == 'true'
+      run: |
+        # Get version for redirect page
+        VERSION_CONTENT=""
+        if [ -f "version" ]; then
+          VERSION_CONTENT=$(cat version)
+        fi
+        
+        # Clone gh-pages branch or create it if it doesn't exist
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        
+        # Check if gh-pages branch exists
+        if git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+          git fetch origin gh-pages
+          git checkout gh-pages
+        else
+          git checkout --orphan gh-pages
+          git rm -rf .
+        fi
+        
+        # Create artifact URLs
+        ARTIFACT_BASE_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts"
+        
+        # Create redirect pages
+        mkdir -p latest
+        
+        # Create main redirect page
+        cat << 'EOF' > latest/index.html
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>HLVMM Development Artifacts</title>
+          <meta name="description" content="Latest development artifacts for HLVMM">
+        </head>
+        <body>
+          <h1>HLVMM Development Artifacts</h1>
+          <p>This page provides stable URLs for the latest development artifacts.</p>
+          <ul>
+            <li><a href="WindowsProvisioning.iso">WindowsProvisioning.iso</a></li>
+            <li><a href="LinuxProvisioning.iso">LinuxProvisioning.iso</a></li>
+          </ul>
+          <p>Build: #${{ github.run_number }} | Version: VERSION_CONTENT | Branch: devel</p>
+          <p>Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
+        </body>
+        </html>
+        EOF
+        
+        # Replace VERSION_CONTENT placeholder
+        sed -i "s/VERSION_CONTENT/${VERSION_CONTENT}/g" latest/index.html
+        
+        # Create individual ISO redirect pages
+        cat << 'EOF' > latest/WindowsProvisioning.iso
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta http-equiv="refresh" content="0; url=ARTIFACT_URL">
+          <meta charset="utf-8">
+          <title>Redirecting to WindowsProvisioning.iso</title>
+        </head>
+        <body>
+          <p>Redirecting to <a href="ARTIFACT_URL">WindowsProvisioning.iso</a>...</p>
+          <script>window.location.href = "ARTIFACT_URL";</script>
+        </body>
+        </html>
+        EOF
+        
+        cat << 'EOF' > latest/LinuxProvisioning.iso
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta http-equiv="refresh" content="0; url=ARTIFACT_URL">
+          <meta charset="utf-8">
+          <title>Redirecting to LinuxProvisioning.iso</title>
+        </head>
+        <body>
+          <p>Redirecting to <a href="ARTIFACT_URL">LinuxProvisioning.iso</a>...</p>
+          <script>window.location.href = "ARTIFACT_URL";</script>
+        </body>
+        </html>
+        EOF
+        
+        # Note: We can't get the exact artifact download URLs until after upload
+        # So we create a placeholder that will be updated by a separate API call
+        # For now, point to the Actions run page
+        WINDOWS_REDIRECT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        LINUX_REDIRECT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        
+        sed -i "s|ARTIFACT_URL|${WINDOWS_REDIRECT_URL}|g" latest/WindowsProvisioning.iso
+        sed -i "s|ARTIFACT_URL|${LINUX_REDIRECT_URL}|g" latest/LinuxProvisioning.iso
+        
+        # Create README
+        cat << EOF > README.md
+        # HLVMM GitHub Pages
+        
+        This branch contains GitHub Pages content for stable development artifact URLs.
+        
+        ## Development Artifacts
+        
+        - [Windows Provisioning ISO](https://charlespick.github.io/HLVMM/latest/WindowsProvisioning.iso)
+        - [Linux Provisioning ISO](https://charlespick.github.io/HLVMM/latest/LinuxProvisioning.iso)
+        
+        Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        Build: #${{ github.run_number }}
+        Version: ${VERSION_CONTENT}
+        EOF
+        
+        # Commit and push
+        git add .
+        git commit -m "Update devel artifacts redirect - build #${{ github.run_number }}"
+        git push origin gh-pages
+        
+        echo "Updated GitHub Pages redirect for devel artifacts"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         

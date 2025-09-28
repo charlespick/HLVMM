@@ -4,8 +4,12 @@ param(
 
 # Define variables
 $branchRef = if ($Develop) { "devel" } else { "main" }
-$releaseTag = if ($Develop) { "development" } else { "release" }
 $directoryName = if ($Develop) { "Home Lab Virtual Machine Manager (Devel)" } else { "Home Lab Virtual Machine Manager" }
+$baseDownloadUrl = if ($Develop) { 
+    "https://charlespick.github.io/HLVMM/latest" 
+} else { 
+    "https://github.com/charlespick/HLVMM/releases/latest/download" 
+}
 
 $localVersionFile = "C:\Program Files\$directoryName\isosversion"
 $repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/$branchRef/version"
@@ -53,18 +57,46 @@ if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
     # Define the ISO files to download
     $isoFiles = @("LinuxProvisioning.iso", "WindowsProvisioning.iso")
 
-    # Download each ISO file from GitHub releases
+    # Download each ISO file from the appropriate endpoint
     foreach ($isoFile in $isoFiles) {
-        $downloadUrl = "https://github.com/charlespick/HLVMM/releases/download/$releaseTag/$isoFile"
+        $downloadUrl = "$baseDownloadUrl/$isoFile"
         $localPath = Join-Path $installDirectory $isoFile
         
-        Write-Host "Downloading $isoFile..."
+        Write-Host "Downloading $isoFile from $(if ($Develop) { 'development endpoint' } else { 'latest release' })..."
         try {
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing
-            Write-Host "Downloaded $isoFile successfully."
+            # For development builds, we might need to handle redirects from GitHub Pages
+            if ($Develop) {
+                # GitHub Pages may serve HTML redirect pages, so we need to handle potential redirects
+                $webRequest = [System.Net.WebRequest]::Create($downloadUrl)
+                $webRequest.AllowAutoRedirect = $true
+                $webRequest.UserAgent = "PowerShell-HLVMM-Installer"
+                
+                try {
+                    $response = $webRequest.GetResponse()
+                    $responseStream = $response.GetResponseStream()
+                    $fileStream = [System.IO.File]::Create($localPath)
+                    $responseStream.CopyTo($fileStream)
+                    $fileStream.Close()
+                    $responseStream.Close()
+                    $response.Close()
+                    Write-Host "Downloaded $isoFile successfully."
+                }
+                catch {
+                    # Fallback to Invoke-WebRequest if the direct approach fails
+                    Write-Host "Trying fallback download method..."
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing -UserAgent "PowerShell-HLVMM-Installer"
+                    Write-Host "Downloaded $isoFile successfully using fallback method."
+                }
+            }
+            else {
+                # For production, use the standard GitHub releases endpoint
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing
+                Write-Host "Downloaded $isoFile successfully."
+            }
         }
         catch {
             Write-Warning "Failed to download $isoFile`: $($_.Exception.Message)"
+            Write-Host "Download URL was: $downloadUrl"
         }
     }
 
