@@ -10,10 +10,23 @@ on:
     branches:
       - main
       - devel
+  workflow_run:
+    workflows: ["Auto Increment Version"]
+    types:
+      - completed
+    branches:
+      - main
+      - devel
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    
+    # Only run on direct pushes to non-main/devel branches, PRs, or after version bump completion
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && !contains(fromJson('["main", "devel"]'), github.ref_name)) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     
     permissions:
       contents: write
@@ -21,6 +34,9 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        # For workflow_run events, we need to checkout the latest commit after version bump
+        ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
       
     - name: Install ISO creation tools
       run: |
@@ -42,11 +58,18 @@ jobs:
     - name: Determine release tag and name
       id: release_info
       run: |
-        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+        # For workflow_run events, get the branch from the triggering workflow
+        if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+        else
+          BRANCH="${{ github.ref_name }}"
+        fi
+        
+        if [[ "$BRANCH" == "main" ]]; then
           echo "tag_name=rolling" >> $GITHUB_OUTPUT
           echo "release_name=Rolling Release" >> $GITHUB_OUTPUT
           echo "is_prerelease=false" >> $GITHUB_OUTPUT
-        elif [[ "${{ github.ref }}" == "refs/heads/devel" ]] || [[ "${{ github.ref }}" == "refs/heads/cloud-builds-and-env-based-devel" ]]; then
+        elif [[ "$BRANCH" == "devel" ]] || [[ "$BRANCH" == "cloud-builds-and-env-based-devel" ]]; then
           echo "tag_name=development" >> $GITHUB_OUTPUT
           echo "release_name=Development Release" >> $GITHUB_OUTPUT
           echo "is_prerelease=true" >> $GITHUB_OUTPUT
@@ -57,7 +80,7 @@ jobs:
         fi
         
     - name: Delete existing release (if exists)
-      if: github.event_name == 'push'
+      if: github.event_name == 'push' || github.event_name == 'workflow_run'
       run: |
         TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
         
@@ -79,7 +102,7 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Create new release
-      if: github.event_name == 'push'
+      if: github.event_name == 'push' || github.event_name == 'workflow_run'
       run: |
         TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
         RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
@@ -91,11 +114,18 @@ jobs:
           VERSION_CONTENT=$(cat version)
         fi
         
+        # Get the correct branch name
+        if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+          BRANCH_NAME="${{ github.event.workflow_run.head_branch }}"
+        else
+          BRANCH_NAME="${{ github.ref_name }}"
+        fi
+        
         # Create release notes
         cat << EOF > release_notes.md
         ## Automated Build - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
         
-        **Branch:** \`${{ github.ref_name }}\`
+        **Branch:** \`${BRANCH_NAME}\`
         **Commit:** \`${{ github.sha }}\`
         **Version:** \`${VERSION_CONTENT}\`
         
