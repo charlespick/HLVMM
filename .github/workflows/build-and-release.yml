@@ -16,6 +16,8 @@ jobs:
     
     permissions:
       contents: write
+      pull-requests: write
+      issues: write
       
     steps:
     - name: Checkout repository
@@ -95,7 +97,7 @@ jobs:
           echo "release_name=Rolling Release" >> $GITHUB_OUTPUT
           echo "is_prerelease=false" >> $GITHUB_OUTPUT
           echo "create_release=true" >> $GITHUB_OUTPUT
-        elif [[ "${{ github.ref_name }}" == "devel" ]] || [[ "${{ github.ref_name }}" == "cloud-builds-and-env-based-devel" ]]; then
+        elif [[ "${{ github.ref_name }}" == "devel" ]]; then
           echo "tag_name=development" >> $GITHUB_OUTPUT
           echo "release_name=Development Release" >> $GITHUB_OUTPUT
           echo "is_prerelease=true" >> $GITHUB_OUTPUT
