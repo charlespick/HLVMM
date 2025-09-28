@@ -25,6 +25,8 @@ TEMP_USER_DATA=$(mktemp)
 
 # Process the user-data file line by line, replacing the placeholder with the script content
 while IFS= read -r line; do
+    # Remove any carriage return characters from the line
+    line="${line//$'\r'/}"
     if [[ "$line" == "      #!!! Build system put provisioning-service.sh content here !!!#" ]]; then
         # Found the placeholder - inject the provisioning script with proper indentation
         while IFS= read -r script_line || [ -n "$script_line" ]; do
