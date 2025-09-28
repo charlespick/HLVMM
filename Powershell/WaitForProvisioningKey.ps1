@@ -3,8 +3,6 @@ param (
     [string]$VMName
 )
 
-
-
 function Set-VMKeyValuePair {
     param (
         [Parameter(Mandatory = $true)]

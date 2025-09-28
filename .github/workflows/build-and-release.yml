@@ -1,0 +1,322 @@
+name: Version Bump, Build and Release
+
+# Triggering a build
+
+on:
+  push:
+    branches:
+      - main
+      - devel
+  pull_request:
+    branches:
+      - main
+      - devel
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+        
+    # VERSION BUMP LOGIC (only for pushes to main/devel)
+    - name: Check if version file was changed
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel')
+      id: version_check
+      run: |
+        git diff-tree --no-commit-id --name-only -r ${{ github.sha }} > files_changed.txt
+        if grep -q "^version$" files_changed.txt; then
+          echo "skip_bump=true" >> $GITHUB_OUTPUT
+          echo "Version file was already changed in this commit, skipping bump"
+        else
+          echo "skip_bump=false" >> $GITHUB_OUTPUT
+          echo "Version file not changed, will bump version"
+        fi
+        
+    - name: Read current version
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      id: read_version
+      run: |
+        version=$(cat version)
+        echo "current=$version" >> $GITHUB_OUTPUT
+        echo "Current version: $version"
+
+    - name: Increment version
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      id: bump_version
+      run: |
+        ver=${{ steps.read_version.outputs.current }}
+        IFS='.' read -r major minor build <<< "$ver"
+        build=$(printf "%03d" $((10#$build + 1))) # force decimal, keep leading zeros
+        new_ver="$major.$minor.$build"
+        echo "$new_ver" > version
+        echo "new=$new_ver" >> $GITHUB_OUTPUT
+        echo "Bumped version to: $new_ver"
+
+    - name: Commit new version
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add version
+        git commit -m "ci: bump version to ${{ steps.bump_version.outputs.new }}"
+        git push
+        echo "Version bump committed and pushed"
+        
+    # BUILD LOGIC (runs for all events after version bump if needed)
+    - name: Install ISO creation tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xorriso genisoimage
+        
+    - name: Make build script executable
+      run: chmod +x Scripts/make_provisioning_isos.sh
+      
+    - name: Build ISOs
+      run: |
+        cd Scripts
+        ./make_provisioning_isos.sh
+        
+    - name: List created ISOs
+      run: |
+        echo "Created ISOs:"
+        ls -la ISOs/
+        
+    # RELEASE LOGIC
+    - name: Determine release strategy
+      id: release_info
+      run: |
+        if [[ "${{ github.ref_name }}" == "main" ]]; then
+          echo "create_standard_release=true" >> $GITHUB_OUTPUT
+          echo "upload_to_gh_pages=false" >> $GITHUB_OUTPUT
+          echo "is_prerelease=false" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref_name }}" == "devel" ]]; then
+          echo "create_standard_release=false" >> $GITHUB_OUTPUT
+          echo "upload_to_gh_pages=true" >> $GITHUB_OUTPUT
+          echo "is_prerelease=true" >> $GITHUB_OUTPUT
+        else
+          echo "create_standard_release=false" >> $GITHUB_OUTPUT
+          echo "upload_to_gh_pages=false" >> $GITHUB_OUTPUT
+          echo "is_prerelease=true" >> $GITHUB_OUTPUT
+        fi
+        
+    # MAIN BRANCH: Create standard release (uses GitHub's /latest endpoint)
+    - name: Create standard release for main
+      if: github.event_name == 'push' && steps.release_info.outputs.create_standard_release == 'true'
+      run: |
+        # Get version from version file (now contains the bumped version)
+        VERSION_CONTENT=""
+        if [ -f "version" ]; then
+          VERSION_CONTENT=$(cat version)
+        fi
+        
+        # Use version as tag name for standard releases
+        TAG_NAME="v${VERSION_CONTENT}"
+        
+        # Create release notes
+        cat << EOF > release_notes.md
+        ## Release ${VERSION_CONTENT} - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        
+        **Branch:** \`${{ github.ref_name }}\`
+        **Commit:** \`${{ github.sha }}\`
+        **Version:** \`${VERSION_CONTENT}\`
+        
+        ### Artifacts
+        - **WindowsProvisioning.iso** - Provisioning ISO for Windows systems
+        - **LinuxProvisioning.iso** - Provisioning ISO for Linux systems (cloud-init compatible)
+        
+        ### Build Information
+        - Built on: Ubuntu Latest
+        - ISO Tools: xorriso, genisoimage
+        - Workflow: ${{ github.workflow }}
+        - Run: #${{ github.run_number }}
+        
+        ### Download URLs
+        These artifacts are available at stable URLs:
+        - Windows ISO: \`https://github.com/${{ github.repository }}/releases/latest/download/WindowsProvisioning.iso\`
+        - Linux ISO: \`https://github.com/${{ github.repository }}/releases/latest/download/LinuxProvisioning.iso\`
+        EOF
+        
+        # Create the release
+        gh release create "$TAG_NAME" \
+          --title "Release $VERSION_CONTENT" \
+          --notes-file release_notes.md \
+          ISOs/WindowsProvisioning.iso \
+          ISOs/LinuxProvisioning.iso
+          
+        echo "Created standard release: $TAG_NAME"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # DEVEL BRANCH: Upload ISOs directly to GitHub Pages
+    - name: Upload development ISOs to GitHub Pages
+      if: github.event_name == 'push' && steps.release_info.outputs.upload_to_gh_pages == 'true'
+      run: |
+        # Get version for documentation
+        VERSION_CONTENT=""
+        if [ -f "version" ]; then
+          VERSION_CONTENT=$(cat version)
+        fi
+        
+        # Copy ISOs to a safe location
+        SAFE_ISO_DIR=$(mktemp -d)
+        cp ISOs/WindowsProvisioning.iso "$SAFE_ISO_DIR/"
+        cp ISOs/LinuxProvisioning.iso "$SAFE_ISO_DIR/"
+        
+        # Create a completely clean temporary directory for gh-pages work
+        TEMP_DIR=$(mktemp -d)
+        cd "$TEMP_DIR"
+        
+        # Initialize git and configure
+        git init --initial-branch=gh-pages
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        
+        # Check if gh-pages branch exists and get its content
+        if git ls-remote --exit-code https://github.com/${{ github.repository }}.git gh-pages >/dev/null 2>&1; then
+          # Pull existing gh-pages content
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch origin gh-pages
+          git checkout -b gh-pages origin/gh-pages
+          # Clean everything except .git directory
+          git rm -rf . 2>/dev/null || true
+          git clean -fd
+        else
+          # Create new orphan branch
+          git checkout --orphan gh-pages
+        fi
+        
+        # Create directory structure
+        mkdir -p latest
+        
+        # Copy ISOs from safe location
+        cp "$SAFE_ISO_DIR/WindowsProvisioning.iso" latest/
+        cp "$SAFE_ISO_DIR/LinuxProvisioning.iso" latest/
+        
+        # Create index page
+        cat << EOF > latest/index.html
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>HLVMM Development Artifacts</title>
+          <meta name="description" content="Latest development artifacts for HLVMM">
+        </head>
+        <body>
+          <h1>HLVMM Development Artifacts</h1>
+          <p>Download the latest development provisioning ISOs:</p>
+          <ul>
+            <li><a href="WindowsProvisioning.iso">WindowsProvisioning.iso</a> ($(du -h "$SAFE_ISO_DIR/WindowsProvisioning.iso" | cut -f1))</li>
+            <li><a href="LinuxProvisioning.iso">LinuxProvisioning.iso</a> ($(du -h "$SAFE_ISO_DIR/LinuxProvisioning.iso" | cut -f1))</li>
+          </ul>
+          <p><strong>Build:</strong> #${{ github.run_number }} | <strong>Version:</strong> ${VERSION_CONTENT} | <strong>Branch:</strong> devel</p>
+          <p><strong>Last updated:</strong> $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
+          <p><strong>Commit:</strong> <a href="https://github.com/${{ github.repository }}/commit/${{ github.sha }}">${{ github.sha }}</a></p>
+        </body>
+        </html>
+        EOF
+        
+        # Create root README
+        cat << EOF > README.md
+        # HLVMM GitHub Pages
+        
+        This branch contains GitHub Pages content for HLVMM development artifacts.
+        
+        ## Development Artifacts
+        
+        The latest development builds are available at:
+        
+        - **Windows Provisioning ISO**: [https://charlespick.github.io/HLVMM/latest/WindowsProvisioning.iso](https://charlespick.github.io/HLVMM/latest/WindowsProvisioning.iso)
+        - **Linux Provisioning ISO**: [https://charlespick.github.io/HLVMM/latest/LinuxProvisioning.iso](https://charlespick.github.io/HLVMM/latest/LinuxProvisioning.iso)
+        
+        **Last updated:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')  
+        **Build:** #${{ github.run_number }}  
+        **Version:** ${VERSION_CONTENT}  
+        **Commit:** ${{ github.sha }}
+        
+        ## Direct Downloads
+        
+        - [Browse all files](https://charlespick.github.io/HLVMM/latest/)
+        
+        These ISOs are updated automatically on each push to the devel branch.
+        EOF
+        
+        # Add all files and commit
+        git add .
+        git commit -m "Update devel artifacts - build #${{ github.run_number }} (v${VERSION_CONTENT})"
+        
+        # Push to gh-pages
+        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git gh-pages
+        
+        # Clean up
+        rm -rf "$SAFE_ISO_DIR"
+        cd - 
+        rm -rf "$TEMP_DIR"
+        
+        echo "Successfully uploaded development ISOs to GitHub Pages"
+        echo "Available at:"
+        echo "- https://charlespick.github.io/HLVMM/latest/WindowsProvisioning.iso"
+        echo "- https://charlespick.github.io/HLVMM/latest/LinuxProvisioning.iso"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload artifacts for PR builds
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: provisioning-isos-pr-${{ github.event.number }}
+        path: |
+          ISOs/WindowsProvisioning.iso
+          ISOs/LinuxProvisioning.iso
+        retention-days: 7
+        
+    - name: Comment on PR with download links
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const runId = context.runId;
+          const prNumber = context.issue.number;
+          
+          // Get version for PR comment
+          const fs = require('fs');
+          let version = 'unknown';
+          try {
+            version = fs.readFileSync('version', 'utf8').trim();
+          } catch (e) {
+            console.log('Could not read version file');
+          }
+          
+          const comment = `## 🔨 Build Completed Successfully!
+          
+          The provisioning ISOs have been built and are available as artifacts.
+          
+          **Download Links:**
+          - [Download Build Artifacts](https://github.com/${{ github.repository }}/actions/runs/${runId})
+          
+          **Artifacts:**
+          - \`WindowsProvisioning.iso\` - Provisioning ISO for Windows systems
+          - \`LinuxProvisioning.iso\` - Provisioning ISO for Linux systems (cloud-init compatible)
+          
+          **Build Details:**
+          - Version: \`${version}\`
+          - Commit: \`${{ github.sha }}\`
+          - Branch: \`${{ github.head_ref }}\`
+          - Workflow Run: #${{ github.run_number }}
+          
+          Artifacts will be retained for 7 days.`;
+          
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });

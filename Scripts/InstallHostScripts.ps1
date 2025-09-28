@@ -1,8 +1,16 @@
+param(
+    [switch]$Develop
+)
+
 # Define variables
-$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager\scriptsversion"
-$repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/main/version"
-$repoPowershellApiUrl = "https://api.github.com/repos/charlespick/HLVMM/contents/Powershell"
-$installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager"
+$branchRef = if ($Develop) { "devel" } else { "main" }
+$directoryName = if ($Develop) { "Home Lab Virtual Machine Manager (Devel)" } else { "Home Lab Virtual Machine Manager" }
+$refParameter = if ($Develop) { "?ref=$branchRef" } else { "" }
+
+$localVersionFile = "C:\Program Files\$directoryName\scriptsversion"
+$repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/$branchRef/version"
+$repoPowershellApiUrl = "https://api.github.com/repos/charlespick/HLVMM/contents/Powershell$refParameter"
+$installDirectory = "C:\Program Files\$directoryName"
 
 # Function to compare versions
 function Compare-Version {
@@ -30,7 +38,17 @@ else {
 }
 
 # Get repo version
-$repoVersion = Invoke-RestMethod -Uri ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random)) -Method Get -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache"; "User-Agent" = "PowerShell" }
+$repoVersionParams = @{
+    Uri     = ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random))
+    Method  = 'Get'
+    UseBasicParsing = $true
+    Headers = @{
+        "Cache-Control" = "no-cache"
+        "Pragma"       = "no-cache"
+        "User-Agent"   = "PowerShell"
+    }
+}
+$repoVersion = Invoke-RestMethod @repoVersionParams
 
 # Compare versions
 if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
