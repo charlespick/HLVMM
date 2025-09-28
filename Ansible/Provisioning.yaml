@@ -3,8 +3,8 @@
   hosts: "{{ hyperv_host }}"
   gather_facts: no
   vars:
-    Develop: false
-    install_directory: "{{ 'Home Lab Virtual Machine Manager (Devel)' if Develop else 'Home Lab Virtual Machine Manager' }}"
+    develop: false
+    install_directory: "{{ 'Home Lab Virtual Machine Manager (Devel)' if develop else 'Home Lab Virtual Machine Manager' }}"
 
   pre_tasks:
     - name: Determine OS Family from Image Name
