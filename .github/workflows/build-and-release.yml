@@ -1,5 +1,7 @@
 name: Version Bump, Build and Release
 
+# Triggering a build
+
 on:
   push:
     branches:
