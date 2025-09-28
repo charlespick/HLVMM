@@ -65,9 +65,8 @@ if [ "$ISO_TOOL" == "xorriso" ]; then
         -iso-level 3 \
         -full-iso9660-filenames \
         -volid "WINPROVISIONING" \
-        -joliet \
-        -rational-rock \
-        -udf \
+        -J -joliet-long \
+        -R \
         -o "$WIN_ISO_OUTPUT_PATH" \
         "$WINDOWS_FOLDER"
 elif [ "$ISO_TOOL" == "genisoimage" ] || [ "$ISO_TOOL" == "mkisofs" ]; then
@@ -76,7 +75,7 @@ elif [ "$ISO_TOOL" == "genisoimage" ] || [ "$ISO_TOOL" == "mkisofs" ]; then
         -iso-level 3 \
         -full-iso9660-filenames \
         -V "WINPROVISIONING" \
-        -J \
+        -J -joliet-long \
         -R \
         -o "$WIN_ISO_OUTPUT_PATH" \
         "$WINDOWS_FOLDER"
