@@ -6,7 +6,7 @@
     Develop: false
     branch_ref: "{{ 'devel' if Develop else 'main' }}"
     script_suffix: "{{ 'Dev' if Develop else '' }}"
-    develop_param: "{{ '-Develop $true' if Develop else '' }}"
+    develop_param: "{{ '-Develop' if Develop else '' }}"
   tasks:
     - name: Ensure C:\Temp exists
       win_file:
@@ -35,7 +35,7 @@
     branch_ref: "{{ 'devel' if Develop else 'main' }}"
     script_suffix: "{{ 'Dev' if Develop else '' }}"
     folder_path: "{{ 'devel-builds' if Develop else 'main-builds' }}"
-    develop_param: "{{ '-Develop $true' if Develop else '' }}"
+    develop_param: "{{ '-Develop' if Develop else '' }}"
   tasks:
     - name: Download the PowerShell script
       changed_when: false
