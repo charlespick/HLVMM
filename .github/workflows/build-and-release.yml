@@ -122,8 +122,13 @@ jobs:
         
         # Delete the tag if it exists
         if git tag -l | grep -q "^${TAG_NAME}$"; then
-          echo "Deleting existing tag: $TAG_NAME"
+          echo "Deleting existing local tag: $TAG_NAME"
           git tag -d "$TAG_NAME" || true
+        fi
+        
+        # Delete the remote tag if it exists
+        if git ls-remote --exit-code origin refs/tags/"$TAG_NAME" >/dev/null 2>&1; then
+          echo "Deleting existing remote tag: $TAG_NAME"
           git push origin --delete "$TAG_NAME" || true
         fi
       env:
@@ -169,7 +174,7 @@ jobs:
         
         # Create the tag on the current commit first
         git tag "$TAG_NAME"
-        git push origin "$TAG_NAME"
+        git push origin "$TAG_NAME" --force
         
         # Create the release
         gh release create "$TAG_NAME" \
