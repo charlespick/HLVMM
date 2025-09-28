@@ -20,25 +20,24 @@ cp "$VERSION_FILE" "$LINUX_FOLDER/"
 PROVISIONING_SCRIPT_PATH="$LINUX_FOLDER/provisioning-service.sh"
 USER_DATA_TEMPLATE_PATH="$LINUX_FOLDER/user-data"
 
-# Read the provisioning script content
-PROVISIONING_SCRIPT_CONTENT=$(cat "$PROVISIONING_SCRIPT_PATH")
+# Create a temporary file to build the new user-data content
+TEMP_USER_DATA=$(mktemp)
 
-# Indent each line of the provisioning script for YAML (6 spaces for proper indentation under 'content: |')
-INDENTED_SCRIPT_CONTENT=""
+# Process the user-data file line by line, replacing the placeholder with the script content
 while IFS= read -r line; do
-    INDENTED_SCRIPT_CONTENT="${INDENTED_SCRIPT_CONTENT}      ${line}\n"
-done <<< "$PROVISIONING_SCRIPT_CONTENT"
+    if [[ "$line" == "      #!!! Build system put provisioning-service.sh content here !!!#" ]]; then
+        # Found the placeholder - inject the provisioning script with proper indentation
+        while IFS= read -r script_line || [ -n "$script_line" ]; do
+            printf "      %s\n" "$script_line"
+        done < "$PROVISIONING_SCRIPT_PATH"
+    else
+        # Regular line - output as-is
+        printf "%s\n" "$line"
+    fi
+done < "$USER_DATA_TEMPLATE_PATH" > "$TEMP_USER_DATA"
 
-# Remove the trailing newline
-INDENTED_SCRIPT_CONTENT=$(echo -ne "$INDENTED_SCRIPT_CONTENT")
-
-# Replace the placeholder with the actual script content
-PLACEHOLDER="      #!!! Build system put provisioning-service.sh content here !!!#"
-USER_DATA_CONTENT=$(cat "$USER_DATA_TEMPLATE_PATH")
-MODIFIED_USER_DATA_CONTENT="${USER_DATA_CONTENT//$PLACEHOLDER/$INDENTED_SCRIPT_CONTENT}"
-
-# Write the modified user-data back to the Linux folder (without trailing newline)
-echo -n "$MODIFIED_USER_DATA_CONTENT" > "$USER_DATA_TEMPLATE_PATH"
+# Replace the original file with the processed content
+mv "$TEMP_USER_DATA" "$USER_DATA_TEMPLATE_PATH"
 
 # Check which ISO creation tool is available
 ISO_TOOL=""
