@@ -31,10 +31,10 @@
   hosts: hyperv_hosts
   gather_facts: false
   vars:
-    Develop: false
-    branch_ref: "{{ 'devel' if Develop else 'main' }}"
-    script_suffix: "{{ 'Dev' if Develop else '' }}"
-    develop_param: "{{ '-Develop' if Develop else '' }}"
+    develop: false
+    branch_ref: "{{ 'devel' if develop else 'main' }}"
+    script_suffix: "{{ 'Dev' if develop else '' }}"
+    develop_param: "{{ '-Develop' if develop else '' }}"
   tasks:
     - name: Download the PowerShell script
       changed_when: false
