@@ -176,7 +176,7 @@ jobs:
         cd "$TEMP_DIR"
         
         # Initialize git and configure
-        git init
+        git init --initial-branch=gh-pages
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
         
@@ -186,9 +186,9 @@ jobs:
           git remote add origin https://github.com/${{ github.repository }}.git
           git fetch origin gh-pages
           git checkout -b gh-pages origin/gh-pages
-          # Clean everything except .git
-          find . -mindepth 1 -maxdepth 1 -name '.git' -prune -o -type f -delete
-          find . -mindepth 1 -maxdepth 1 -name '.git' -prune -o -type d -exec rm -rf {} + 2>/dev/null || true
+          # Clean everything except .git directory
+          git rm -rf . 2>/dev/null || true
+          git clean -fd
         else
           # Create new orphan branch
           git checkout --orphan gh-pages
