@@ -1,4 +1,4 @@
-name: Build and Release Provisioning ISOs
+name: Version Bump, Build and Release
 
 on:
   push:
@@ -10,23 +10,10 @@ on:
     branches:
       - main
       - devel
-  workflow_run:
-    workflows: ["Auto Increment Version"]
-    types:
-      - completed
-    branches:
-      - main
-      - devel
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    
-    # Only run on direct pushes to non-main/devel branches, PRs, or after version bump completion
-    if: |
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'push' && !contains(fromJson('["main", "devel"]'), github.ref_name)) ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     
     permissions:
       contents: write
@@ -35,9 +22,53 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        # For workflow_run events, we need to checkout the latest commit after version bump
-        ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
-      
+        fetch-depth: 2
+        
+    # VERSION BUMP LOGIC (only for pushes to main/devel)
+    - name: Check if version file was changed
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel')
+      id: version_check
+      run: |
+        git diff-tree --no-commit-id --name-only -r ${{ github.sha }} > files_changed.txt
+        if grep -q "^version$" files_changed.txt; then
+          echo "skip_bump=true" >> $GITHUB_OUTPUT
+          echo "Version file was already changed in this commit, skipping bump"
+        else
+          echo "skip_bump=false" >> $GITHUB_OUTPUT
+          echo "Version file not changed, will bump version"
+        fi
+        
+    - name: Read current version
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      id: read_version
+      run: |
+        version=$(cat version)
+        echo "current=$version" >> $GITHUB_OUTPUT
+        echo "Current version: $version"
+
+    - name: Increment version
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      id: bump_version
+      run: |
+        ver=${{ steps.read_version.outputs.current }}
+        IFS='.' read -r major minor build <<< "$ver"
+        build=$(printf "%03d" $((10#$build + 1))) # force decimal, keep leading zeros
+        new_ver="$major.$minor.$build"
+        echo "$new_ver" > version
+        echo "new=$new_ver" >> $GITHUB_OUTPUT
+        echo "Bumped version to: $new_ver"
+
+    - name: Commit new version
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add version
+        git commit -m "ci: bump version to ${{ steps.bump_version.outputs.new }}"
+        git push
+        echo "Version bump committed and pushed"
+        
+    # BUILD LOGIC (runs for all events after version bump if needed)
     - name: Install ISO creation tools
       run: |
         sudo apt-get update
@@ -53,34 +84,32 @@ jobs:
         
     - name: List created ISOs
       run: |
+        echo "Created ISOs:"
         ls -la ISOs/
         
+    # RELEASE LOGIC
     - name: Determine release tag and name
       id: release_info
       run: |
-        # For workflow_run events, get the branch from the triggering workflow
-        if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-          BRANCH="${{ github.event.workflow_run.head_branch }}"
-        else
-          BRANCH="${{ github.ref_name }}"
-        fi
-        
-        if [[ "$BRANCH" == "main" ]]; then
+        if [[ "${{ github.ref_name }}" == "main" ]]; then
           echo "tag_name=rolling" >> $GITHUB_OUTPUT
           echo "release_name=Rolling Release" >> $GITHUB_OUTPUT
           echo "is_prerelease=false" >> $GITHUB_OUTPUT
-        elif [[ "$BRANCH" == "devel" ]] || [[ "$BRANCH" == "cloud-builds-and-env-based-devel" ]]; then
+          echo "create_release=true" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref_name }}" == "devel" ]] || [[ "${{ github.ref_name }}" == "cloud-builds-and-env-based-devel" ]]; then
           echo "tag_name=development" >> $GITHUB_OUTPUT
           echo "release_name=Development Release" >> $GITHUB_OUTPUT
           echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          echo "create_release=true" >> $GITHUB_OUTPUT
         else
-          echo "tag_name=pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
-          echo "release_name=Pull Request #${{ github.event.number }}" >> $GITHUB_OUTPUT
+          echo "tag_name=" >> $GITHUB_OUTPUT
+          echo "release_name=" >> $GITHUB_OUTPUT
           echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          echo "create_release=false" >> $GITHUB_OUTPUT
         fi
         
     - name: Delete existing release (if exists)
-      if: github.event_name == 'push' || github.event_name == 'workflow_run'
+      if: github.event_name == 'push' && steps.release_info.outputs.create_release == 'true'
       run: |
         TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
         
@@ -102,30 +131,23 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Create new release
-      if: github.event_name == 'push' || github.event_name == 'workflow_run'
+      if: github.event_name == 'push' && steps.release_info.outputs.create_release == 'true'
       run: |
         TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
         RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
         IS_PRERELEASE="${{ steps.release_info.outputs.is_prerelease }}"
         
-        # Get version from version file
+        # Get version from version file (now contains the bumped version)
         VERSION_CONTENT=""
         if [ -f "version" ]; then
           VERSION_CONTENT=$(cat version)
-        fi
-        
-        # Get the correct branch name
-        if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-          BRANCH_NAME="${{ github.event.workflow_run.head_branch }}"
-        else
-          BRANCH_NAME="${{ github.ref_name }}"
         fi
         
         # Create release notes
         cat << EOF > release_notes.md
         ## Automated Build - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
         
-        **Branch:** \`${BRANCH_NAME}\`
+        **Branch:** \`${{ github.ref_name }}\`
         **Commit:** \`${{ github.sha }}\`
         **Version:** \`${VERSION_CONTENT}\`
         
@@ -154,6 +176,7 @@ jobs:
           ISOs/WindowsProvisioning.iso \
           ISOs/LinuxProvisioning.iso
           
+        echo "Created release: $RELEASE_NAME ($TAG_NAME)"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
@@ -175,6 +198,15 @@ jobs:
           const runId = context.runId;
           const prNumber = context.issue.number;
           
+          // Get version for PR comment
+          const fs = require('fs');
+          let version = 'unknown';
+          try {
+            version = fs.readFileSync('version', 'utf8').trim();
+          } catch (e) {
+            console.log('Could not read version file');
+          }
+          
           const comment = `## 🔨 Build Completed Successfully!
           
           The provisioning ISOs have been built and are available as artifacts.
@@ -187,6 +219,7 @@ jobs:
           - \`LinuxProvisioning.iso\` - Provisioning ISO for Linux systems (cloud-init compatible)
           
           **Build Details:**
+          - Version: \`${version}\`
           - Commit: \`${{ github.sha }}\`
           - Branch: \`${{ github.head_ref }}\`
           - Workflow Run: #${{ github.run_number }}
