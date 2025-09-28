@@ -4,15 +4,13 @@ param(
 
 # Define variables
 $branchRef = if ($Develop) { "devel" } else { "main" }
+$releaseTag = if ($Develop) { "development" } else { "release" }
 $directoryName = if ($Develop) { "Home Lab Virtual Machine Manager (Devel)" } else { "Home Lab Virtual Machine Manager" }
-$refParameter = if ($Develop) { "?ref=$branchRef" } else { "" }
 
-$localVersionFile = "C:\Program Files\$directoryName\scriptsversion"
+$localVersionFile = "C:\Program Files\$directoryName\isosversion"
 $repoVersionUrl = "https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/$branchRef/version"
-$repoPowershellApiUrl = "https://api.github.com/repos/charlespick/HLVMM/contents/Powershell$refParameter"
 $installDirectory = "C:\Program Files\$directoryName"
 
-# Function to compare versions
 function Compare-Version {
     param (
         [string]$localVersion,
@@ -38,35 +36,40 @@ else {
 }
 
 # Get repo version
-$repoVersion = Invoke-RestMethod -Uri ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random)) -Method Get -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache"; "User-Agent" = "PowerShell" }
+$repoVersion = Invoke-RestMethod -Uri ("{0}?nocache={1}" -f $repoVersionUrl, (Get-Random)) -Method Get -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache"; "User-Agent" = "PowerShell" } 
 
 # Compare versions
 if (Compare-Version -localVersion $localVersion -repoVersion $repoVersion) {
     Write-Host "Newer version found. Updating..."
 
-    # Get Powershell directory contents from GitHub API
-    $powershellFiles = Invoke-RestMethod -Uri $repoPowershellApiUrl -Method Get -UseBasicParsing
-
-    # Delete all files in the install directory
-    Get-ChildItem -Path $installDirectory -Filter *.ps1 -Recurse | Remove-Item -Force
+    # Delete all .ISO files in the installation directory
+    Get-ChildItem -Path $installDirectory -Filter *.ISO | Remove-Item -Force
 
     # Ensure install directory exists
     if (-not (Test-Path $installDirectory)) {
         New-Item -Path $installDirectory -ItemType Directory -Force | Out-Null
     }
 
-    # Download and save each file from the Powershell directory
-    foreach ($file in $powershellFiles) {
-        if ($file.type -eq "file") {
-            $fileContent = Invoke-RestMethod -Uri $file.download_url -Method Get -UseBasicParsing
-            $filePath = Join-Path -Path $installDirectory -ChildPath $file.name
-            Set-Content -Path $filePath -Value $fileContent -Force
+    # Define the ISO files to download
+    $isoFiles = @("LinuxProvisioning.iso", "WindowsProvisioning.iso")
+
+    # Download each ISO file from GitHub releases
+    foreach ($isoFile in $isoFiles) {
+        $downloadUrl = "https://github.com/charlespick/HLVMM/releases/download/$releaseTag/$isoFile"
+        $localPath = Join-Path $installDirectory $isoFile
+        
+        Write-Host "Downloading $isoFile..."
+        try {
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -UseBasicParsing
+            Write-Host "Downloaded $isoFile successfully."
+        }
+        catch {
+            Write-Warning "Failed to download $isoFile`: $($_.Exception.Message)"
         }
     }
 
-    # Download and save the version file
-    $versionContent = Invoke-RestMethod -Uri $repoVersionUrl -Method Get -UseBasicParsing
-    Set-Content -Path $localVersionFile -Value $versionContent -Force
+    # Save the new version
+    Set-Content -Path $localVersionFile -Value $repoVersion -Force
 
     Write-Host "Update complete."
 }
