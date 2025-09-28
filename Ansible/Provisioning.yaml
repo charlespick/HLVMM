@@ -2,6 +2,9 @@
 - name: Provision VM
   hosts: "{{ hyperv_host }}"
   gather_facts: no
+  vars:
+    Develop: false
+    install_directory: "{{ 'Home Lab Virtual Machine Manager (Devel)' if Develop else 'Home Lab Virtual Machine Manager' }}"
 
   pre_tasks:
     - name: Determine OS Family from Image Name
@@ -59,20 +62,20 @@
   tasks:
     - name: Copy Image
       ansible.windows.win_command: >
-        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\CopyImage.ps1"
+        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\{{ install_directory }}\CopyImage.ps1"
         -VMName "{{ vm_name }}"
         -ImageName "{{ image_name }}"
       register: copyimage_result
 
     - name: Copy Provisioning ISO
       ansible.windows.win_command: >
-        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\CopyProvisioningISO.ps1"
+        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\{{ install_directory }}\CopyProvisioningISO.ps1"
         -OSFamily {{ os_family }}
         -VMDataFolder "{{ copyimage_result.stdout | trim }}"
 
     - name: Register VM
       ansible.windows.win_command: >
-        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\RegisterVM.ps1"
+        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\{{ install_directory }}\RegisterVM.ps1"
         -OSFamily "{{ os_family }}"
         -GBRam {{ gb_ram }}
         -CPUcores {{ cpu_cores }}
@@ -81,12 +84,12 @@
 
     - name: Wait For Provisioning to Start
       ansible.windows.win_command: >
-        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\WaitForProvisioningKey.ps1"
+        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\{{ install_directory }}\WaitForProvisioningKey.ps1"
         -VMName {{ vm_name }}
 
     - name: Publish Provisioning Data
       ansible.windows.win_command: >
-        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\PublishProvisioningData.ps1"
+        powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\{{ install_directory }}\PublishProvisioningData.ps1"
         -GuestHostName {{ vm_name }}
         -GuestLaUid {{ guest_la_uid }}
         {% if guest_v4_ipaddr is defined and guest_v4_ipaddr|length > 0 %}-GuestV4IpAddr {{ guest_v4_ipaddr }}{% endif %}

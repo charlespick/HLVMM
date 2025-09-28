@@ -9,11 +9,16 @@ param(
     [string]$AccessKeyId,
 
     [Parameter(Mandatory = $true)]
-    [string]$FolderPath
+    [string]$FolderPath,
+
+    [bool]$Develop = $false
 )
 
-$localVersionFile = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)\isosversion"
-$installDirectory = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)"
+# Define variables
+$directoryName = if ($Develop) { "Home Lab Virtual Machine Manager (Devel)" } else { "Home Lab Virtual Machine Manager" }
+
+$localVersionFile = "C:\Program Files\$directoryName\isosversion"
+$installDirectory = "C:\Program Files\$directoryName"
 
 # Source AWS Secret Access Key from environment variable
 $AccessKeySecret = $env:AWS_SECRET_ACCESS_KEY

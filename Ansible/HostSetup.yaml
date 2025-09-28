@@ -1,7 +1,12 @@
 ---
-- name: Install HLVMM scripts (Dev)
+- name: Install HLVMM scripts
   hosts: hyperv_hosts
   gather_facts: false
+  vars:
+    Develop: false
+    branch_ref: "{{ 'devel' if Develop else 'main' }}"
+    script_suffix: "{{ 'Dev' if Develop else '' }}"
+    develop_param: "{{ '-Develop $true' if Develop else '' }}"
   tasks:
     - name: Ensure C:\Temp exists
       win_file:
@@ -11,34 +16,40 @@
     - name: Download the PowerShell script
       changed_when: false
       win_get_url:
-        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/devel/Scripts/InstallHostScripts.ps1?nocache={{ 9999999 | random }}
-        dest: C:\Temp\InstallHostScriptsDev.ps1
+        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/{{ branch_ref }}/Scripts/InstallHostScripts.ps1?nocache={{ 9999999 | random }}
+        dest: C:\Temp\InstallHostScripts{{ script_suffix }}.ps1
 
     - name: Update scripts
-      win_shell: powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostScriptsDev.ps1
+      win_shell: powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostScripts{{ script_suffix }}.ps1 {{ develop_param }}
       register: script_result
       changed_when: "'Update complete.' in script_result.stdout"
       failed_when:
         - "'Update complete.' not in script_result.stdout"
         - "'No update needed. Local version is up-to-date.' not in script_result.stdout"
 
-- name: Install HLVMM ISOs (Dev)
+- name: Install HLVMM ISOs
   hosts: hyperv_hosts
   gather_facts: false
+  vars:
+    Develop: false
+    branch_ref: "{{ 'devel' if Develop else 'main' }}"
+    script_suffix: "{{ 'Dev' if Develop else '' }}"
+    folder_path: "{{ 'devel-builds' if Develop else 'main-builds' }}"
+    develop_param: "{{ '-Develop $true' if Develop else '' }}"
   tasks:
     - name: Download the PowerShell script
       changed_when: false
       win_get_url:
-        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/devel/Scripts/InstallHostProvisioningISOs.ps1?nocache={{ 9999999 | random }}
-        dest: C:\Temp\InstallHostProvisioningISOsDev.ps1
+        url: https://raw.githubusercontent.com/charlespick/HLVMM/refs/heads/{{ branch_ref }}/Scripts/InstallHostProvisioningISOs.ps1?nocache={{ 9999999 | random }}
+        dest: C:\Temp\InstallHostProvisioningISOs{{ script_suffix }}.ps1
     
     - name: Update ISOs
       win_shell: |
-        powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostProvisioningISOsDev.ps1 `
+        powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostProvisioningISOs{{ script_suffix }}.ps1 `
             -Region "us-west-1" `
             -BucketName "hlvmm-provisioning-isos" `
             -AccessKeyId "{{ lookup('env','AWS_ACCESS_KEY_ID') }}" `
-            -FolderPath "devel-builds"
+            -FolderPath "{{ folder_path }}" {{ develop_param }}
       environment:
         AWS_SECRET_ACCESS_KEY: "{{ lookup('env','AWS_SECRET_ACCESS_KEY') }}"
       register: script_result

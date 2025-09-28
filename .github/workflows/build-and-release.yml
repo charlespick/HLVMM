@@ -1,0 +1,171 @@
+name: Build and Release Provisioning ISOs
+
+on:
+  push:
+    branches:
+      - main
+      - devel
+      - cloud-builds-and-env-based-devel
+  pull_request:
+    branches:
+      - main
+      - devel
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Install ISO creation tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xorriso genisoimage
+        
+    - name: Make build script executable
+      run: chmod +x Scripts/make_provisioning_isos.sh
+      
+    - name: Build ISOs
+      run: |
+        cd Scripts
+        ./make_provisioning_isos.sh
+        
+    - name: List created ISOs
+      run: |
+        ls -la ISOs/
+        
+    - name: Determine release tag and name
+      id: release_info
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "tag_name=rolling" >> $GITHUB_OUTPUT
+          echo "release_name=Rolling Release" >> $GITHUB_OUTPUT
+          echo "is_prerelease=false" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/devel" ]] || [[ "${{ github.ref }}" == "refs/heads/cloud-builds-and-env-based-devel" ]]; then
+          echo "tag_name=development" >> $GITHUB_OUTPUT
+          echo "release_name=Development Release" >> $GITHUB_OUTPUT
+          echo "is_prerelease=true" >> $GITHUB_OUTPUT
+        else
+          echo "tag_name=pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
+          echo "release_name=Pull Request #${{ github.event.number }}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=true" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Delete existing release (if exists)
+      if: github.event_name == 'push'
+      run: |
+        TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
+        
+        # Check if release exists and delete it
+        if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+          echo "Deleting existing release: $TAG_NAME"
+          gh release delete "$TAG_NAME" --yes
+        else
+          echo "Release $TAG_NAME does not exist, creating new one"
+        fi
+        
+        # Delete the tag if it exists
+        if git tag -l | grep -q "^${TAG_NAME}$"; then
+          echo "Deleting existing tag: $TAG_NAME"
+          git tag -d "$TAG_NAME" || true
+          git push origin --delete "$TAG_NAME" || true
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Create new release
+      if: github.event_name == 'push'
+      run: |
+        TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
+        RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
+        IS_PRERELEASE="${{ steps.release_info.outputs.is_prerelease }}"
+        
+        # Get version from version file
+        VERSION_CONTENT=""
+        if [ -f "version" ]; then
+          VERSION_CONTENT=$(cat version)
+        fi
+        
+        # Create release notes
+        cat << EOF > release_notes.md
+        ## Automated Build - $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        
+        **Branch:** \`${{ github.ref_name }}\`
+        **Commit:** \`${{ github.sha }}\`
+        **Version:** \`${VERSION_CONTENT}\`
+        
+        ### Artifacts
+        - **WindowsProvisioning.iso** - Provisioning ISO for Windows systems
+        - **LinuxProvisioning.iso** - Provisioning ISO for Linux systems (cloud-init compatible)
+        
+        ### Build Information
+        - Built on: Ubuntu Latest
+        - ISO Tools: xorriso, genisoimage
+        - Workflow: ${{ github.workflow }}
+        - Run: #${{ github.run_number }}
+        EOF
+
+        # Create prerelease flag
+        PRERELEASE_FLAG=""
+        if [ "$IS_PRERELEASE" == "true" ]; then
+          PRERELEASE_FLAG="--prerelease"
+        fi
+        
+        # Create the release
+        gh release create "$TAG_NAME" \
+          --title "$RELEASE_NAME" \
+          --notes-file release_notes.md \
+          $PRERELEASE_FLAG \
+          ISOs/WindowsProvisioning.iso \
+          ISOs/LinuxProvisioning.iso
+          
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload artifacts for PR builds
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: provisioning-isos-pr-${{ github.event.number }}
+        path: |
+          ISOs/WindowsProvisioning.iso
+          ISOs/LinuxProvisioning.iso
+        retention-days: 7
+        
+    - name: Comment on PR with download links
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const runId = context.runId;
+          const prNumber = context.issue.number;
+          
+          const comment = `## 🔨 Build Completed Successfully!
+          
+          The provisioning ISOs have been built and are available as artifacts.
+          
+          **Download Links:**
+          - [Download Build Artifacts](https://github.com/${{ github.repository }}/actions/runs/${runId})
+          
+          **Artifacts:**
+          - \`WindowsProvisioning.iso\` - Provisioning ISO for Windows systems
+          - \`LinuxProvisioning.iso\` - Provisioning ISO for Linux systems (cloud-init compatible)
+          
+          **Build Details:**
+          - Commit: \`${{ github.sha }}\`
+          - Branch: \`${{ github.head_ref }}\`
+          - Workflow Run: #${{ github.run_number }}
+          
+          Artifacts will be retained for 7 days.`;
+          
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });

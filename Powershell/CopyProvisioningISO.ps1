@@ -7,11 +7,11 @@ param (
     [string]$VMDataFolder
 )
 
-# Define static paths for provisioning ISOs
-$StaticCDPath = "C:\Program Files\Home Lab Virtual Machine Manager (Devel)"
+# Derive the script's directory path automatically (will be prod or devel based on where script is located)
+$ScriptDirectory = $PSScriptRoot
 
-$LinuxISOPath = Join-Path -Path $StaticCDPath -ChildPath "LinuxProvisioning.iso"
-$WindowsISOPath = Join-Path -Path $StaticCDPath -ChildPath "WindowsProvisioning.iso"
+$LinuxISOPath = Join-Path -Path $ScriptDirectory -ChildPath "LinuxProvisioning.iso"
+$WindowsISOPath = Join-Path -Path $ScriptDirectory -ChildPath "WindowsProvisioning.iso"
 
 # Function to validate if a folder exists
 function Validate-Folder {
