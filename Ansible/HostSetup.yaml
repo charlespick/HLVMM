@@ -45,13 +45,7 @@
     
     - name: Update ISOs
       win_shell: |
-        powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostProvisioningISOs{{ script_suffix }}.ps1 `
-            -Region "us-west-1" `
-            -BucketName "hlvmm-provisioning-isos" `
-            -AccessKeyId "{{ lookup('env','AWS_ACCESS_KEY_ID') }}" `
-            -FolderPath "{{ folder_path }}" {{ develop_param }}
-      environment:
-        AWS_SECRET_ACCESS_KEY: "{{ lookup('env','AWS_SECRET_ACCESS_KEY') }}"
+        powershell.exe -ExecutionPolicy Bypass -File C:\Temp\InstallHostProvisioningISOs{{ script_suffix }}.ps1 {{ develop_param }}
       register: script_result
       changed_when: "'Update complete.' in script_result.stdout"
       failed_when:
