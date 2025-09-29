@@ -1,51 +1,5 @@
 Start-Transcript -Path "C:\ProgramData\HyperV\ProvisioningService.log" -Append
 
-# Module loading and execution system
-$ModulesDir = "C:\ProgramData\HyperV\modules"
-
-# Module execution order
-$ModuleExecutionOrder = @(
-    "mod_general",
-    "mod_net",
-    "mod_domain"
-)
-
-# Global flag to track domain join success
-$global:DomainJoinSucceeded = $false
-
-# Load and execute modules
-function Invoke-Modules {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$DecryptedKeysDir
-    )
-    
-    Write-Host "Starting module execution with $($ModuleExecutionOrder.Count) modules..."
-    
-    foreach ($moduleName in $ModuleExecutionOrder) {
-        $modulePath = Join-Path -Path $ModulesDir -ChildPath "$moduleName.ps1"
-        
-        if (Test-Path $modulePath) {
-            Write-Host "Loading module: $moduleName"
-            # Dot-source the module file
-            . $modulePath
-            
-            # Check if the module's execute function exists
-            $executeFunction = "Invoke-$($moduleName.Replace('_', ''))"
-            if (Get-Command $executeFunction -ErrorAction SilentlyContinue) {
-                # Execute the module
-                & $executeFunction -DecryptedKeysDir $DecryptedKeysDir
-            } else {
-                Write-Host "ERROR: Module $moduleName does not have function $executeFunction"
-            }
-        } else {
-            Write-Host "ERROR: Module file not found: $modulePath"
-        }
-    }
-    
-    Write-Host "Module execution completed."
-}
-
 function Read-HyperVKvp {
     param(
         [Parameter(Mandatory = $true)][string]$Key
@@ -182,6 +136,8 @@ function Write-HyperVKvp {
     Set-ItemProperty -Path $regPath -Name $Key -Value $Value -Type String
 }
 
+$PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
+
 function Decrypt-AesCbcWithPrependedIV {
     [CmdletBinding()]
     [OutputType([string], [byte[]])]
@@ -267,7 +223,51 @@ function Get-HlvmmDataKeys {
     return $allKeys
 }
 
-$PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
+# Module loading and execution system
+$ModulesDir = "C:\ProgramData\HyperV\modules"
+
+# Module execution order
+$ModuleExecutionOrder = @(
+    "mod_general",
+    "mod_net",
+    "mod_domain"
+)
+
+# Global flag to track domain join success
+$global:DomainJoinSucceeded = $false
+
+# Load and execute modules
+function Invoke-Modules {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DecryptedKeysDir
+    )
+    
+    Write-Host "Starting module execution with $($ModuleExecutionOrder.Count) modules..."
+    
+    foreach ($moduleName in $ModuleExecutionOrder) {
+        $modulePath = Join-Path -Path $ModulesDir -ChildPath "$moduleName.ps1"
+        
+        if (Test-Path $modulePath) {
+            Write-Host "Loading module: $moduleName"
+            # Dot-source the module file
+            . $modulePath
+            
+            # Check if the module's execute function exists
+            $executeFunction = "Invoke-$($moduleName.Replace('_', ''))"
+            if (Get-Command $executeFunction -ErrorAction SilentlyContinue) {
+                # Execute the module
+                & $executeFunction -DecryptedKeysDir $DecryptedKeysDir
+            } else {
+                Write-Host "ERROR: Module $moduleName does not have function $executeFunction"
+            }
+        } else {
+            Write-Host "WARNING: Module file not found: $modulePath (skipping)"
+        }
+    }
+    
+    Write-Host "Module execution completed."
+}
 
 if (-not (Test-Path $PhaseFile)) {
     "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
@@ -474,14 +474,79 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             }
         }
 
-        if ($global:DomainJoinSucceeded) {
-            $TaskName = "ProvisioningService"
-            Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-            
-            Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
-            Restart-Computer -Force
-        } else {
-            # No domain join needed or failed, proceed to cleanup
+    "phase_one" {
+        "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
+
+        # Check if the "hlvmm.data.guest_domain_join_target" key exists
+        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_target.txt"
+        if (Test-Path $guestDomainJoinTargetPath) {
+            $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
+            if ($guestDomainJoinTarget) {
+                # Retrieve the domain join credentials
+                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_uid.txt"
+                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_pw.txt"
+                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_ou.txt"
+
+                if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
+                    $guestDomainJoinUid = (Get-Content -Path $guestDomainJoinUidPath).Trim()
+                    $guestDomainJoinPw = (Get-Content -Path $guestDomainJoinPwPath).Trim()
+                    $guestDomainJoinOU = (Get-Content -Path $guestDomainJoinOUPath).Trim()
+
+                    if ($guestDomainJoinUid -and $guestDomainJoinPw -and $guestDomainJoinOU) {
+                        # Attempt to join the domain
+                        try {
+                            $guestDomainJoinPwSecure = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
+                            $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $guestDomainJoinPwSecure)
+
+                            # Wait until the domain controller is reachable via ping
+                            $maxAttempts = 60
+                            $attempt = 0
+                            while ($attempt -lt $maxAttempts) {
+                                if (Test-Connection -ComputerName $guestDomainJoinTarget -Count 1 -Quiet) {
+                                    Write-Host "Domain controller $guestDomainJoinTarget is reachable."
+                                    break
+                                }
+                                else {
+                                    Write-Host "Waiting for domain controller $guestDomainJoinTarget to become reachable..."
+                                    Start-Sleep -Seconds 5
+                                    $attempt++
+                                }
+                            }
+                            if ($attempt -eq $maxAttempts) {
+                                Write-Host "Domain controller $guestDomainJoinTarget is not reachable after $($maxAttempts * 5) seconds. Skipping domain join."
+                                return
+                            }
+
+                            # Use Add-Computer instead of netdom for secure domain join
+                            Add-Computer -DomainName $guestDomainJoinTarget -Credential $credential -OUPath $guestDomainJoinOU -Force -ErrorAction Stop
+
+                            Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
+                            "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
+
+                            $TaskName = "ProvisioningService"
+                            Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+                            
+                            Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
+                            Restart-Computer -Force
+                        }
+                        catch {
+                            Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
+                        }
+                    }
+                    else {
+                        Write-Host "Domain join credentials are incomplete. Skipping domain join."
+                    }
+                }
+                else {
+                    Write-Host "Domain join credential files are missing. Skipping domain join."
+                }
+            }
+            else {
+                Write-Host "hlvmm.data.guest_domain_join_target file is empty. Skipping domain join."
+            }
+        }
+        else {
+            Write-Host "hlvmm.data.guest_domain_join_target key does not exist. Skipping domain join."
             "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
             $TaskName = "ProvisioningService"
             Write-Host "Disabling scheduled task $TaskName..."
@@ -489,7 +554,6 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             Write-Host "Scheduled task $TaskName has been disabled."
 
             Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
-            Remove-Item -Path $ModulesDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }

@@ -68,6 +68,13 @@ mod_general_execute() {
         echo "mod_general: Local admin credentials not provided or incomplete. Skipping local account configuration."
     fi
     
+    # Ignore domain join parameters (not supported on Linux)
+    if [[ -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_target" || \
+          -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_uid" || \
+          -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_pw" ]]; then
+        echo "mod_general: Domain join parameters detected but ignored (not supported on Linux)."
+    fi
+    
     echo "=== mod_general: General system configuration completed ==="
 }
 

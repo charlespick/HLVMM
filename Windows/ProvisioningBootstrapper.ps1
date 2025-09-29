@@ -1,3 +1,4 @@
+
 $CDROMPath   = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $TargetPath  = "C:\ProgramData\HyperV"
 $ModulesPath = "$TargetPath\modules"
@@ -19,19 +20,18 @@ if (-not (Test-Path $ModulesPath)) {
 Copy-Item -Path "$CDROMPath\$ScriptName" -Destination "$TargetPath\$ScriptName" -Force
 Unblock-File -Path "$TargetPath\$ScriptName"
 
-# Copy all module files
-$ModuleFiles = @("mod_general.ps1", "mod_net.ps1", "mod_domain.ps1")
-foreach ($ModuleFile in $ModuleFiles) {
-    $SourcePath = "$CDROMPath\modules\$ModuleFile"
-    $DestPath = "$ModulesPath\$ModuleFile"
-    
-    if (Test-Path $SourcePath) {
+# Copy all module files dynamically
+if (Test-Path "$CDROMPath\modules") {
+    Get-ChildItem -Path "$CDROMPath\modules" -Filter "*.ps1" | ForEach-Object {
+        $SourcePath = $_.FullName
+        $DestPath = Join-Path -Path $ModulesPath -ChildPath $_.Name
+        
         Copy-Item -Path $SourcePath -Destination $DestPath -Force
         Unblock-File -Path $DestPath
-        Write-Host "Copied module file: $ModuleFile"
-    } else {
-        Write-Host "Warning: Module file not found: $SourcePath"
+        Write-Host "Copied module file: $($_.Name)"
     }
+} else {
+    Write-Host "Warning: Modules directory not found at $CDROMPath\modules"
 }
 
 # Copy version file for version verification

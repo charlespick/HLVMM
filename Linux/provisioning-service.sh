@@ -20,11 +20,11 @@ fi
 # Module loading and execution system
 MODULES_DIR="/usr/local/bin/modules"
 
-# Module execution order
+# Module execution order (dynamically determined by available modules)
+# Domain join is handled via ignored parameters for Linux, no separate module needed
 MODULE_EXECUTION_ORDER=(
     "mod_general"
     "mod_net" 
-    "mod_domain"
     "mod_ansible"
 )
 
@@ -50,7 +50,7 @@ execute_modules() {
                 echo "ERROR: Module $module_name does not have an execute function"
             fi
         else
-            echo "ERROR: Module file not found: $module_path"
+            echo "WARNING: Module file not found: $module_path (skipping)"
         fi
     done
     
@@ -757,11 +757,10 @@ phase_two() {
         echo "Deleted keys folder: $key_dir"
     fi
 
-    # Delete the service and copied script (and modules)
+    # Delete the service and copied script
     SERVICE_NAME="provisioning.service"
     TARGET_PATH="/usr/local/bin"
     SCRIPT_NAME="ProvisioningService.sh"
-    MODULES_DIR="/usr/local/bin/modules"
 
     echo "Phase two completed."
 
@@ -769,9 +768,8 @@ phase_two() {
     (sleep 2 && systemctl stop "$SERVICE_NAME") &
     rm -f "/etc/systemd/system/$SERVICE_NAME"
     rm -f "$TARGET_PATH/$SCRIPT_NAME"
-    rm -rf "$MODULES_DIR"
     systemctl daemon-reload
-    echo "Deleted service, copied script, and modules."
+    echo "Deleted service and copied script."
 }
 
 read_phase_status
