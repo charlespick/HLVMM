@@ -282,6 +282,9 @@ jobs:
           const runId = context.runId;
           const prNumber = context.issue.number;
           
+          // Get the actual commit SHA for PRs
+          const commitSha = context.payload.pull_request.head.sha;
+          
           // Get version for PR comment
           const fs = require('fs');
           let version = 'unknown';
@@ -304,7 +307,7 @@ jobs:
           
           **Build Details:**
           - Version: \`${version}\`
-          - Commit: \`${{ github.sha }}\`
+          - Commit: \`${commitSha}\`
           - Branch: \`${{ github.head_ref }}\`
           - Workflow Run: #${{ github.run_number }}
           
