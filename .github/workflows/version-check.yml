@@ -53,7 +53,7 @@ jobs:
       id: pr_version
       run: |
         # Get the version from PR branch
-        git checkout HEAD~0  # Go back to PR branch
+        git checkout ${{ github.head_ref }}  # Switch back to PR branch
         pr_version=$(cat version | tr -d '\n\r\t ')
         echo "pr=$pr_version" >> $GITHUB_OUTPUT
         echo "PR branch version: $pr_version"
