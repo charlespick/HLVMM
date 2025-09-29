@@ -1,6 +1,7 @@
 
 $CDROMPath   = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $TargetPath  = "C:\ProgramData\HyperV"
+$ModulesPath = "$TargetPath\modules"
 $ScriptName  = "ProvisioningService.ps1"
 $TaskName    = "ProvisioningService"
 
@@ -9,8 +10,29 @@ Write-Host "Copying $ScriptName to $TargetPath..."
 if (-not (Test-Path $TargetPath)) {
     New-Item -ItemType Directory -Path $TargetPath -Force | Out-Null
 }
+
+# Create modules directory
+if (-not (Test-Path $ModulesPath)) {
+    New-Item -ItemType Directory -Path $ModulesPath -Force | Out-Null
+}
+
+# Copy main script
 Copy-Item -Path "$CDROMPath\$ScriptName" -Destination "$TargetPath\$ScriptName" -Force
 Unblock-File -Path "$TargetPath\$ScriptName"
+
+# Copy all module files dynamically
+if (Test-Path "$CDROMPath\modules") {
+    Get-ChildItem -Path "$CDROMPath\modules" -Filter "*.ps1" | ForEach-Object {
+        $SourcePath = $_.FullName
+        $DestPath = Join-Path -Path $ModulesPath -ChildPath $_.Name
+        
+        Copy-Item -Path $SourcePath -Destination $DestPath -Force
+        Unblock-File -Path $DestPath
+        Write-Host "Copied module file: $($_.Name)"
+    }
+} else {
+    Write-Host "Warning: Modules directory not found at $CDROMPath\modules"
+}
 
 # Copy version file for version verification
 $VersionFile = "version"

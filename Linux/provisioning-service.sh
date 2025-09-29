@@ -17,6 +17,46 @@ if ! systemctl is-active --quiet hv-kvp-daemon && ! systemctl is-active --quiet 
     fi
 fi
 
+# Module loading and execution system
+MODULES_DIR="/usr/local/bin/modules"
+
+# Module execution order (dynamically determined by available modules)
+# Domain join is handled via ignored parameters for Linux, no separate module needed
+MODULE_EXECUTION_ORDER=(
+    "mod_general"
+    "mod_net" 
+    "mod_ansible"
+)
+
+# Load and execute modules
+execute_modules() {
+    local decrypted_keys_dir="$1"
+    
+    echo "Starting module execution with ${#MODULE_EXECUTION_ORDER[@]} modules..."
+    
+    for module_name in "${MODULE_EXECUTION_ORDER[@]}"; do
+        local module_path="$MODULES_DIR/${module_name}.sh"
+        
+        if [[ -f "$module_path" ]]; then
+            echo "Loading module: $module_name"
+            # Source the module file
+            source "$module_path"
+            
+            # Check if the module's execute function exists
+            if declare -f "${module_name}_execute" >/dev/null; then
+                # Execute the module
+                "${module_name}_execute" "$decrypted_keys_dir"
+            else
+                echo "ERROR: Module $module_name does not have an execute function"
+            fi
+        else
+            echo "WARNING: Module file not found: $module_path (skipping)"
+        fi
+    done
+    
+    echo "Module execution completed."
+}
+
 # Function to read and decrypt a key from Hyper-V KVP with proper chunking support
 read_hyperv_kvp_with_decryption() {
     local key="$1"
@@ -692,192 +732,8 @@ phase_one() {
         fi
     fi
 
-    # Configure local admin account if credentials are provided and non-empty
-    local_admin_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_uid" | tr -d '\0\r\n' | xargs)
-    local_admin_password=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_la_pw" | tr -d '\0\r\n' | xargs)
-
-    if [[ -n "$local_admin_user" && -n "$local_admin_password" ]]; then
-        if id "$local_admin_user" &>/dev/null; then
-            # Use secure temp file for chpasswd to avoid command line exposure
-            local temp_passwd="/tmp/chpasswd_$$"
-            touch "$temp_passwd"
-            chmod 600 "$temp_passwd"
-            echo "$local_admin_user:$local_admin_password" > "$temp_passwd"
-            chpasswd < "$temp_passwd"
-            rm -f "$temp_passwd"
-            echo "Updated password for existing user: $local_admin_user"
-        else
-            useradd -m -s /bin/bash "$local_admin_user"
-            # Use secure temp file for chpasswd to avoid command line exposure
-            local temp_passwd="/tmp/chpasswd_$$"
-            touch "$temp_passwd"
-            chmod 600 "$temp_passwd"
-            echo "$local_admin_user:$local_admin_password" > "$temp_passwd"
-            chpasswd < "$temp_passwd"
-            rm -f "$temp_passwd"
-            # Add to sudo group for administrative privileges
-            usermod -aG sudo "$local_admin_user" 2>/dev/null || usermod -aG wheel "$local_admin_user" 2>/dev/null || true
-            echo "Created local admin account: $local_admin_user"
-        fi
-        
-        # Ensure the user is in the admin/sudo group
-        if groups "$local_admin_user" | grep -qE '\b(sudo|wheel)\b'; then
-            echo "User $local_admin_user has administrative privileges."
-        else
-            echo "WARNING: User $local_admin_user may not have administrative privileges."
-        fi
-    else
-        echo "Local admin credentials not provided or incomplete. Skipping local account configuration."
-    fi
-
-    # Ignore domain join parameters
-    if [[ -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_target" || -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_uid" || -f "$decrypted_keys_dir/hlvmm_data_guest_domain_join_pw" ]]; then
-        echo "Domain join parameters detected but ignored (not supported on Linux)."
-    fi
-
-    # Configure the network with netplan if IP settings are complete and valid
-    # Read network configuration values safely
-    ip_address=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_ip_addr" | tr -d '\0\r\n' | xargs)
-    cidr_prefix=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_cidr_prefix" | tr -d '\0\r\n' | xargs)
-    default_gateway=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_default_gw" | tr -d '\0\r\n' | xargs)
-    dns1=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_dns1" | tr -d '\0\r\n' | xargs)
-    dns2=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_v4_dns2" | tr -d '\0\r\n' | xargs)
-    dns_suffix=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_net_dns_suffix" | tr -d '\0\r\n' | xargs)
-    
-    # Check if all required network parameters are provided and non-empty
-    if [[ -n "$ip_address" && -n "$cidr_prefix" && -n "$default_gateway" ]]; then
-        echo "Configuring static network: $ip_address/$cidr_prefix via $default_gateway"
-        
-        # Function to safely escape YAML values
-        yaml_escape() {
-            local value="$1"
-            # If value contains special characters, quote it
-            if [[ "$value" == *[\ \'\"\`\$\!\@\#\%\^\&\*\(\)\[\]\{\}\|\\\;\:\<\>\,\?\~]* ]]; then
-                printf '"%s"' "${value//\"/\\\"}"
-            else
-                printf '%s' "$value"
-            fi
-        }
-        
-        # Remove existing netplan configurations to prevent conflicts with cloud-init configs
-        # that may use MAC-based matching which breaks with dynamic MAC addressing
-        echo "Removing existing netplan configurations..."
-        rm -f /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null || true
-        
-        # Build netplan configuration programmatically to avoid templating issues
-        netplan_config="/etc/netplan/01-netcfg.yaml"
-        
-        # Start building the YAML structure
-        {
-            echo "network:"
-            echo "  version: 2"
-            echo "  ethernets:"
-            echo "    eth0:"
-            echo "      dhcp4: no"
-            echo "      addresses:"
-            echo "        - $(yaml_escape "$ip_address/$cidr_prefix")"
-            echo "      routes:"
-            echo "        - to: default"
-            echo "          via: $(yaml_escape "$default_gateway")"
-            
-            # Only add nameservers section if we have at least one DNS server
-            if [[ -n "$dns1" || -n "$dns2" ]]; then
-                echo "      nameservers:"
-                
-                # Add addresses array if we have DNS servers
-                if [[ -n "$dns1" || -n "$dns2" ]]; then
-                    echo "        addresses:"
-                    [[ -n "$dns1" ]] && echo "          - $(yaml_escape "$dns1")"
-                    [[ -n "$dns2" ]] && echo "          - $(yaml_escape "$dns2")"
-                fi
-                
-                # Add search domain if provided
-                if [[ -n "$dns_suffix" ]]; then
-                    echo "        search:"
-                    echo "          - $(yaml_escape "$dns_suffix")"
-                fi
-            fi
-        } > "$netplan_config"
-        
-        # Set secure file permissions to prevent security warnings
-        chmod 600 "$netplan_config"
-        
-        # Validate the generated netplan configuration
-        if netplan generate 2>/dev/null; then
-            netplan apply
-            echo "Network configured with netplan successfully."
-        else
-            echo "ERROR: Generated netplan configuration is invalid. Keeping DHCP configuration."
-            rm -f "$netplan_config"
-        fi
-    else
-        echo "Network configuration incomplete or missing. Required: IP address, CIDR prefix, and default gateway."
-        echo "  IP Address: ${ip_address:-'<empty>'}"
-        echo "  CIDR Prefix: ${cidr_prefix:-'<empty>'}"
-        echo "  Default Gateway: ${default_gateway:-'<empty>'}"
-        echo "Skipping static network configuration - will use DHCP."
-    fi
-
-    # Set the hostname if it is provided and non-empty
-    hostname=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_guest_host_name" | tr -d '\0\r\n' | xargs)
-    if [[ -n "$hostname" ]]; then
-        echo "$hostname" > /etc/hostname
-        hostnamectl set-hostname "$hostname"
-        echo "Hostname set to: $hostname"
-    else
-        echo "Hostname not provided or empty. Skipping hostname configuration."
-    fi
-    
-    # Configure Ansible SSH access if both user and key are provided and non-empty
-    ansible_ssh_user=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_ansible_ssh_user" | tr -d '\0\r\n' | xargs)
-    ansible_ssh_key=$(read_file_safe "$decrypted_keys_dir/hlvmm_data_ansible_ssh_key" | tr -d '\0\r\n' | xargs)
-    
-    if [[ -n "$ansible_ssh_user" && -n "$ansible_ssh_key" ]]; then
-        echo "Configuring Ansible SSH access for user: $ansible_ssh_user"
-        
-        # Create the user if it doesn't exist
-        if ! id "$ansible_ssh_user" &>/dev/null; then
-            useradd -m -s /bin/bash "$ansible_ssh_user"
-            echo "Created Ansible SSH user: $ansible_ssh_user"
-        else
-            echo "Ansible SSH user already exists: $ansible_ssh_user"
-        fi
-        
-        # Add user to sudo group (trying both sudo and wheel for different distributions)
-        usermod -aG sudo "$ansible_ssh_user" 2>/dev/null || usermod -aG wheel "$ansible_ssh_user" 2>/dev/null || true
-        
-        # Verify the user is in the admin/sudo group
-        if groups "$ansible_ssh_user" | grep -qE '\b(sudo|wheel)\b'; then
-            echo "User $ansible_ssh_user has sudo privileges."
-            
-            # Configure passwordless sudo for this user
-            echo "$ansible_ssh_user ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$ansible_ssh_user"
-            chmod 440 "/etc/sudoers.d/$ansible_ssh_user"
-            echo "Configured passwordless sudo for user: $ansible_ssh_user"
-        else
-            echo "WARNING: Failed to add $ansible_ssh_user to sudo group"
-        fi
-        
-        # Set up SSH authorized_keys
-        user_home=$(eval echo "~$ansible_ssh_user")
-        ssh_dir="$user_home/.ssh"
-        authorized_keys_file="$ssh_dir/authorized_keys"
-        
-        # Create .ssh directory if it doesn't exist
-        mkdir -p "$ssh_dir"
-        chown "$ansible_ssh_user:$ansible_ssh_user" "$ssh_dir"
-        chmod 700 "$ssh_dir"
-        
-        # Add the SSH public key to authorized_keys
-        echo "$ansible_ssh_key" > "$authorized_keys_file"
-        chown "$ansible_ssh_user:$ansible_ssh_user" "$authorized_keys_file"
-        chmod 600 "$authorized_keys_file"
-        
-        echo "Configured SSH public key for user: $ansible_ssh_user"
-        echo "Ansible SSH configuration completed successfully."
-    else
-        echo "Ansible SSH credentials not provided or incomplete. Skipping Ansible SSH configuration."
-    fi
+    # Execute all modules in order
+    execute_modules "$decrypted_keys_dir"
     
     echo "Phase one completed."
     reboot

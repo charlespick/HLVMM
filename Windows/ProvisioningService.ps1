@@ -223,6 +223,52 @@ function Get-HlvmmDataKeys {
     return $allKeys
 }
 
+# Module loading and execution system
+$ModulesDir = "C:\ProgramData\HyperV\modules"
+
+# Module execution order
+$ModuleExecutionOrder = @(
+    "mod_general",
+    "mod_net",
+    "mod_domain"
+)
+
+# Global flag to track domain join success
+$global:DomainJoinSucceeded = $false
+
+# Load and execute modules
+function Invoke-Modules {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DecryptedKeysDir
+    )
+    
+    Write-Host "Starting module execution with $($ModuleExecutionOrder.Count) modules..."
+    
+    foreach ($moduleName in $ModuleExecutionOrder) {
+        $modulePath = Join-Path -Path $ModulesDir -ChildPath "$moduleName.ps1"
+        
+        if (Test-Path $modulePath) {
+            Write-Host "Loading module: $moduleName"
+            # Dot-source the module file
+            . $modulePath
+            
+            # Check if the module's execute function exists
+            $executeFunction = "Invoke-$($moduleName.Replace('_', ''))"
+            if (Get-Command $executeFunction -ErrorAction SilentlyContinue) {
+                # Execute the module
+                & $executeFunction -DecryptedKeysDir $DecryptedKeysDir
+            } else {
+                Write-Host "ERROR: Module $moduleName does not have function $executeFunction"
+            }
+        } else {
+            Write-Host "WARNING: Module file not found: $modulePath (skipping)"
+        }
+    }
+    
+    Write-Host "Module execution completed."
+}
+
 if (-not (Test-Path $PhaseFile)) {
     "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
 }
@@ -403,122 +449,8 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             exit
         }
 
-        #region: Configure hostname 
-        # Check if the "hlvmm.data.guest_host_name" key exists and set the hostname
-        $guestHostNamePath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_host_name.txt"
-        if (Test-Path $guestHostNamePath) {
-            $guestHostName = Get-Content -Path $guestHostNamePath
-            if ($guestHostName) {
-                Rename-Computer -NewName $guestHostName -Force
-                Write-Host "Hostname set to: $guestHostName"
-            }
-            else {
-                Write-Host "hlvmm.data.guest_host_name file is empty. Skipping hostname configuration."
-            }
-        }
-        else {
-            Write-Host "hlvmm.data.guest_host_name key does not exist. Skipping hostname configuration."
-        }
-        #endregion
-        
-        #region: Configure network
-        # Check if the IP address is defined
-        $guestV4IpAddrPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_ip_addr.txt"
-        if (Test-Path $guestV4IpAddrPath) {
-            $guestV4IpAddr = Get-Content -Path $guestV4IpAddrPath
-            if ($guestV4IpAddr) {
-                # Retrieve other network settings
-                $guestV4CidrPrefix = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_cidr_prefix.txt")
-                $guestV4DefaultGw = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_default_gw.txt")
-                $guestV4Dns1 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_dns1.txt")
-                $guestV4Dns2 = Get-Content -Path (Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_v4_dns2.txt")
-
-                # Configure the network adapter
-                $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
-                if ($adapter) {
-                    $ipAddressWithPrefix = "$guestV4IpAddr/$guestV4CidrPrefix"
-                    New-NetIPAddress -InterfaceAlias $adapter.Name -IPAddress $guestV4IpAddr -PrefixLength $guestV4CidrPrefix -DefaultGateway $guestV4DefaultGw -ErrorAction Stop
-                    Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses @($guestV4Dns1, $guestV4Dns2) -ErrorAction Stop
-                    Write-Host "Network adapter configured with IP: $ipAddressWithPrefix, Gateway: $guestV4DefaultGw, DNS: $guestV4Dns1, $guestV4Dns2"
-                }
-                else {
-                    Write-Host "No active network adapter found. Skipping network configuration."
-                }
-            }
-            else {
-                Write-Host "hlvmm.data.guest_v4_ip_addr file is empty. Skipping network configuration."
-            }
-        }
-        else {
-            Write-Host "hlvmm.data.guest_v4_ip_addr key does not exist. Skipping network configuration."
-        }
-        #endregion
-
-        #region: Configure local account
-        # Check if the "hlvmm.data.guest_la_uid" key exists
-        $guestLaUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_la_uid.txt"
-        if (Test-Path $guestLaUidPath) {
-            $guestLaUid = Get-Content -Path $guestLaUidPath
-            if ($guestLaUid) {
-                # Retrieve the password for the account
-                $guestLaPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_la_pw.txt"
-                if (Test-Path $guestLaPwPath) {
-                    $guestLaPwSecure = Get-Content -Path $guestLaPwPath | ConvertTo-SecureString -AsPlainText -Force
-                    if ($guestLaPwSecure) {
-                        # Check if the user already exists
-                        $user = Get-LocalUser -Name $guestLaUid -ErrorAction SilentlyContinue
-                        if (-not $user) {
-                            # Create the user if it doesn't exist
-                            try {
-                                New-LocalUser -Name $guestLaUid -Password $guestLaPwSecure -PasswordNeverExpires -ErrorAction Stop
-                                Write-Host "Local account $guestLaUid created."
-                            }
-                            catch {
-                                Write-Host "Failed to create local account $guestLaUid : $_"
-                            }
-                        }
-                        else {
-                            # Update the password for the existing user
-                            try {
-                                $user | Set-LocalUser -Password $guestLaPwSecure -ErrorAction Stop
-                                Write-Host "Password updated for existing user $guestLaUid."
-                            }
-                            catch {
-                                Write-Host "Failed to update password for user $guestLaUid : $_"
-                            }
-                        }
-
-                        # Ensure the user is an administrator
-                        try {
-                            $adminGroup = Get-LocalGroup -Name "Administrators"
-                            if (-not ($adminGroup | Get-LocalGroupMember | Where-Object { $_.Name -like "*$guestLaUid" })) {
-                                Add-LocalGroupMember -Group "Administrators" -Member $guestLaUid -ErrorAction Stop
-                                Write-Host "User $guestLaUid added to Administrators group."
-                            }
-                            else {
-                                Write-Host "User $guestLaUid is already an administrator."
-                            }
-                        }
-                        catch {
-                            Write-Host "Failed to configure administrator privileges for $guestLaUid : $_"
-                        }
-                    }
-                    else {
-                        Write-Host "hlvmm.data.guest_la_pw file is empty. Skipping local account configuration."
-                    }
-                }
-                else {
-                    Write-Host "hlvmm.data.guest_la_pw key does not exist. Skipping local account configuration."
-                }
-            }
-            else {
-                Write-Host "hlvmm.data.guest_la_uid file is empty. Skipping local account configuration."
-            }
-        }
-        else {
-            Write-Host "hlvmm.data.guest_la_uid key does not exist. Skipping local account configuration."
-        }
-        #endregion
+        # Execute all modules in order
+        Invoke-Modules -DecryptedKeysDir $decryptedKeysDir
 
         # Clear sensitive variables from memory
         if (Get-Variable -Name "unwrappedAesKey" -ErrorAction SilentlyContinue) {
@@ -527,6 +459,21 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         Restart-Computer -Force
     }
+    "phase_one" {
+        "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
+
+        # Execute domain join module if needed (in case domain join was deferred to phase_one)
+        if (-not $global:DomainJoinSucceeded) {
+            # Load and execute domain module
+            $domainModulePath = Join-Path -Path $ModulesDir -ChildPath "mod_domain.ps1"
+            if (Test-Path $domainModulePath) {
+                . $domainModulePath
+                if (Get-Command "Invoke-ModDomain" -ErrorAction SilentlyContinue) {
+                    Invoke-ModDomain -DecryptedKeysDir $decryptedKeysDir
+                }
+            }
+        }
+
     "phase_one" {
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 

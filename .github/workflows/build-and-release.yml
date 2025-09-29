@@ -77,13 +77,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y xorriso genisoimage
         
-    - name: Make build script executable
-      run: chmod +x Scripts/make_provisioning_isos.sh
-      
-    - name: Build ISOs
+    - name: Build ISOs using PowerShell script
       run: |
-        cd Scripts
-        ./make_provisioning_isos.sh
+        pwsh Scripts/Build-ProvisioningISOs.ps1
         
     - name: List created ISOs
       run: |
@@ -286,6 +282,9 @@ jobs:
           const runId = context.runId;
           const prNumber = context.issue.number;
           
+          // Get the actual commit SHA for PRs
+          const commitSha = context.payload.pull_request.head.sha;
+          
           // Get version for PR comment
           const fs = require('fs');
           let version = 'unknown';
@@ -308,7 +307,7 @@ jobs:
           
           **Build Details:**
           - Version: \`${version}\`
-          - Commit: \`${{ github.sha }}\`
+          - Commit: \`${commitSha}\`
           - Branch: \`${{ github.head_ref }}\`
           - Workflow Run: #${{ github.run_number }}
           
