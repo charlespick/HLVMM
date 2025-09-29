@@ -1,0 +1,206 @@
+name: Version Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      
+    steps:
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Check if version file was changed
+      id: version_changed
+      run: |
+        # Get the list of changed files in this PR
+        git diff --name-only origin/main...HEAD > changed_files.txt
+        
+        if grep -q "^version$" changed_files.txt; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "✅ Version file was changed in this PR"
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+          echo "❌ Version file was not changed in this PR"
+        fi
+        
+    - name: Fail if version not changed
+      if: steps.version_changed.outputs.changed == 'false'
+      run: |
+        echo "::error::Version file must be updated in PRs to main branch"
+        echo "Please update the version file to reflect the changes in this PR"
+        exit 1
+        
+    - name: Get current main version
+      id: main_version
+      run: |
+        # Get the version from main branch
+        git checkout origin/main
+        main_version=$(cat version | tr -d '\n\r\t ')
+        echo "main=$main_version" >> $GITHUB_OUTPUT
+        echo "Main branch version: $main_version"
+        
+    - name: Get PR version
+      id: pr_version
+      run: |
+        # Get the version from PR branch
+        git checkout HEAD~0  # Go back to PR branch
+        pr_version=$(cat version | tr -d '\n\r\t ')
+        echo "pr=$pr_version" >> $GITHUB_OUTPUT
+        echo "PR branch version: $pr_version"
+        
+    - name: Compare versions
+      id: version_compare
+      run: |
+        main_ver="${{ steps.main_version.outputs.main }}"
+        pr_ver="${{ steps.pr_version.outputs.pr }}"
+        
+        echo "Comparing versions:"
+        echo "  Main: $main_ver"
+        echo "  PR:   $pr_ver"
+        
+        # Function to compare semantic versions
+        compare_versions() {
+          local ver1=$1
+          local ver2=$2
+          
+          # Split versions into components
+          IFS='.' read -r maj1 min1 bld1 <<< "$ver1"
+          IFS='.' read -r maj2 min2 bld2 <<< "$ver2"
+          
+          # Convert to integers for comparison (remove leading zeros)
+          maj1=$((10#$maj1))
+          min1=$((10#$min1))
+          bld1=$((10#$bld1))
+          maj2=$((10#$maj2))
+          min2=$((10#$min2))
+          bld2=$((10#$bld2))
+          
+          # Compare major version
+          if [ $maj2 -gt $maj1 ]; then
+            return 0  # PR version is higher
+          elif [ $maj2 -lt $maj1 ]; then
+            return 1  # PR version is lower
+          fi
+          
+          # Major versions are equal, compare minor
+          if [ $min2 -gt $min1 ]; then
+            return 0  # PR version is higher
+          elif [ $min2 -lt $min1 ]; then
+            return 1  # PR version is lower
+          fi
+          
+          # Major and minor are equal, compare build
+          if [ $bld2 -gt $bld1 ]; then
+            return 0  # PR version is higher
+          else
+            return 1  # PR version is lower or equal
+          fi
+        }
+        
+        if compare_versions "$main_ver" "$pr_ver"; then
+          echo "valid=true" >> $GITHUB_OUTPUT
+          echo "✅ Version increase is valid: $main_ver → $pr_ver"
+        else
+          echo "valid=false" >> $GITHUB_OUTPUT
+          echo "❌ Version must be higher than main branch: $main_ver → $pr_ver"
+        fi
+        
+    - name: Fail if version not increased
+      if: steps.version_compare.outputs.valid == 'false'
+      run: |
+        echo "::error::PR version must be higher than main branch version"
+        echo "Current main version: ${{ steps.main_version.outputs.main }}"
+        echo "PR version: ${{ steps.pr_version.outputs.pr }}"
+        echo "Please update the version to be higher than the main branch"
+        exit 1
+        
+    - name: Success summary
+      if: steps.version_changed.outputs.changed == 'true' && steps.version_compare.outputs.valid == 'true'
+      run: |
+        echo "🎉 Version check passed!"
+        echo "Version will be updated: ${{ steps.main_version.outputs.main }} → ${{ steps.pr_version.outputs.pr }}"
+        
+    - name: Comment on PR with version info
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const versionChanged = '${{ steps.version_changed.outputs.changed }}' === 'true';
+          const versionValid = '${{ steps.version_compare.outputs.valid }}' === 'true';
+          const mainVersion = '${{ steps.main_version.outputs.main }}';
+          const prVersion = '${{ steps.pr_version.outputs.pr }}';
+          
+          let status = '';
+          let details = '';
+          
+          if (!versionChanged) {
+            status = '❌ **Version Check Failed**';
+            details = `
+          **Issue:** Version file was not modified in this PR.
+          
+          **Required Action:** Please update the \`version\` file to reflect the changes in this PR.
+          
+          **Current main version:** \`${mainVersion}\`
+          **Suggested action:** Increment the version appropriately based on your changes.`;
+          } else if (!versionValid) {
+            status = '❌ **Version Check Failed**';
+            details = `
+          **Issue:** Version must be higher than the main branch version.
+          
+          **Current main version:** \`${mainVersion}\`
+          **PR version:** \`${prVersion}\`
+          
+          **Required Action:** Please update the version to be higher than \`${mainVersion}\`.`;
+          } else {
+            status = '✅ **Version Check Passed**';
+            details = `
+          **Version Update:** \`${mainVersion}\` → \`${prVersion}\`
+          
+          The version has been correctly incremented and is ready for merge.`;
+          }
+          
+          const comment = `## 🔢 Version Check Results
+          
+          ${status}
+          
+          ${details}
+          
+          ---
+          *This check ensures that all merges to main include a version bump and that versions always increase.*`;
+          
+          // Find existing version check comment and update it, or create new one
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          
+          const existingComment = comments.find(comment => 
+            comment.body.includes('🔢 Version Check Results')
+          );
+          
+          if (existingComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: comment
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+          }
