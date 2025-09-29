@@ -77,13 +77,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y xorriso genisoimage
         
-    - name: Make build script executable
-      run: chmod +x Scripts/make_provisioning_isos.sh
-      
-    - name: Build ISOs
+    - name: Build ISOs using PowerShell script
       run: |
-        cd Scripts
-        ./make_provisioning_isos.sh
+        pwsh Scripts/Build-ProvisioningISOs.ps1
         
     - name: List created ISOs
       run: |
