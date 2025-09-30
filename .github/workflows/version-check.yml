@@ -19,54 +19,37 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: Check if version file was changed
-      id: version_changed
+    - name: Version Check
+      id: version_check
       run: |
         # Get the list of changed files in this PR
         git diff --name-only origin/main...HEAD > changed_files.txt
         
-        if grep -q "^version$" changed_files.txt; then
-          echo "changed=true" >> $GITHUB_OUTPUT
-          echo "✅ Version file was changed in this PR"
-        else
+        # Check if version file was changed
+        if ! grep -q "^version$" changed_files.txt; then
           echo "changed=false" >> $GITHUB_OUTPUT
           echo "❌ Version file was not changed in this PR"
+          echo "::error::Version file must be updated in PRs to main branch"
+          echo "Please update the version file to reflect the changes in this PR"
+          exit 1
         fi
         
-    - name: Fail if version not changed
-      if: steps.version_changed.outputs.changed == 'false'
-      run: |
-        echo "::error::Version file must be updated in PRs to main branch"
-        echo "Please update the version file to reflect the changes in this PR"
-        exit 1
+        echo "changed=true" >> $GITHUB_OUTPUT
+        echo "✅ Version file was changed in this PR"
         
-    - name: Get current main version
-      id: main_version
-      run: |
         # Get the version from main branch
         git checkout origin/main
         main_version=$(cat version | tr -d '\n\r\t ')
-        echo "main=$main_version" >> $GITHUB_OUTPUT
         echo "Main branch version: $main_version"
         
-    - name: Get PR version
-      id: pr_version
-      run: |
         # Get the version from PR branch
-        git checkout ${{ github.head_ref }}  # Switch back to PR branch
+        git checkout ${{ github.head_ref }}
         pr_version=$(cat version | tr -d '\n\r\t ')
-        echo "pr=$pr_version" >> $GITHUB_OUTPUT
         echo "PR branch version: $pr_version"
         
-    - name: Compare versions
-      id: version_compare
-      run: |
-        main_ver="${{ steps.main_version.outputs.main }}"
-        pr_ver="${{ steps.pr_version.outputs.pr }}"
-        
         echo "Comparing versions:"
-        echo "  Main: $main_ver"
-        echo "  PR:   $pr_ver"
+        echo "  Main: $main_version"
+        echo "  PR:   $pr_version"
         
         # Function to compare semantic versions
         compare_versions() {
@@ -107,26 +90,19 @@ jobs:
           fi
         }
         
-        if compare_versions "$main_ver" "$pr_ver"; then
+        # Compare versions and fail if not incremented
+        if compare_versions "$main_version" "$pr_version"; then
           echo "valid=true" >> $GITHUB_OUTPUT
-          echo "✅ Version increase is valid: $main_ver → $pr_ver"
+          echo "✅ Version increase is valid: $main_version → $pr_version"
+          echo "🎉 Version check passed!"
         else
           echo "valid=false" >> $GITHUB_OUTPUT
-          echo "❌ Version must be higher than main branch: $main_ver → $pr_ver"
+          echo "❌ Version must be higher than main branch: $main_version → $pr_version"
+          echo "::error::PR version must be higher than main branch version"
+          echo "Current main version: $main_version"
+          echo "PR version: $pr_version"
+          echo "Please update the version to be higher than the main branch"
+          exit 1
         fi
-        
-    - name: Fail if version not increased
-      if: steps.version_compare.outputs.valid == 'false'
-      run: |
-        echo "::error::PR version must be higher than main branch version"
-        echo "Current main version: ${{ steps.main_version.outputs.main }}"
-        echo "PR version: ${{ steps.pr_version.outputs.pr }}"
-        echo "Please update the version to be higher than the main branch"
-        exit 1
-        
-    - name: Success summary
-      if: steps.version_changed.outputs.changed == 'true' && steps.version_compare.outputs.valid == 'true'
-      run: |
-        echo "🎉 Version check passed!"
-        echo "Version will be updated: ${{ steps.main_version.outputs.main }} → ${{ steps.pr_version.outputs.pr }}"
+
         
