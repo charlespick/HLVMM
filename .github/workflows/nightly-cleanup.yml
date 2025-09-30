@@ -1,0 +1,90 @@
+name: Nightly Release Cleanup
+
+on:
+  schedule:
+    # Run every night at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allow manual triggering for testing
+
+jobs:
+  cleanup-releases:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Need full history to check tags
+        
+    - name: Clean up old prereleases
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Starting nightly release cleanup..."
+        
+        # Get all releases
+        echo "Fetching all releases..."
+        gh api repos/${{ github.repository }}/releases --paginate > all_releases.json
+        
+        # Extract prereleases, sort by created date (newest first), and keep only the latest 5
+        echo "Processing prereleases..."
+        jq '[.[] | select(.prerelease == true)] | sort_by(.created_at) | reverse' all_releases.json > prereleases.json
+        
+        # Count total prereleases
+        PRERELEASE_COUNT=$(jq 'length' prereleases.json)
+        echo "Found $PRERELEASE_COUNT prereleases"
+        
+        if [ $PRERELEASE_COUNT -gt 5 ]; then
+          # Get prereleases to delete (6th and later)
+          jq '.[5:]' prereleases.json > prereleases_to_delete.json
+          DELETE_COUNT=$(jq 'length' prereleases_to_delete.json)
+          echo "Will delete $DELETE_COUNT old prereleases"
+          
+          # Delete old prereleases
+          jq -r '.[].tag_name' prereleases_to_delete.json | while read tag; do
+            echo "Deleting prerelease: $tag"
+            gh release delete "$tag" --yes || echo "Failed to delete $tag (may have been deleted already)"
+          done
+        else
+          echo "Only $PRERELEASE_COUNT prereleases found, no cleanup needed"
+        fi
+        
+    - name: Clean up releases without tags
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Checking for releases without corresponding tags..."
+        
+        # Get all existing tags
+        git tag > existing_tags.txt
+        
+        # Get all releases and check if their tags exist
+        jq -r '.[].tag_name' all_releases.json > release_tags.txt
+        
+        # Find releases whose tags don't exist
+        echo "Comparing release tags with existing git tags..."
+        while read release_tag; do
+          if ! grep -q "^${release_tag}$" existing_tags.txt; then
+            echo "Found orphaned release: $release_tag (tag no longer exists)"
+            gh release delete "$release_tag" --yes || echo "Failed to delete orphaned release $release_tag"
+          fi
+        done < release_tags.txt
+        
+        echo "Cleanup completed"
+        
+    - name: Summary
+      run: |
+        echo "=== Cleanup Summary ==="
+        echo "Completed nightly release cleanup"
+        echo "- Retained latest 5 prereleases"
+        echo "- Removed older prereleases"
+        echo "- Removed releases without corresponding tags"
+        echo ""
+        echo "Current releases:"
+        gh release list --limit 20
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
